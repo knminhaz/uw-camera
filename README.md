@@ -5,6 +5,32 @@ Native Kotlin Android research app for a Pixel 7. It captures a real ultrawide f
 **Image-quality improvement has not been established.** The connected Pixel 7 exposed ultrawide physical ID 3 and main physical ID 2 behind logical ID 0. Its two 2048×1536 YUV streams configured, but the actual pair request lost the main image buffer. Automatic sequential capture produced completed results. One recorded session had about 1.79 seconds between inputs and about 10% reliable reference coverage; these observations are not quality measurements.
 
 ## Open and run
+ 
+## How it works: the main idea
+
+Keep the ultrawide photo's full view, and borrow main-camera detail only where the two photos match reliably.
+
+```mermaid
+flowchart TD
+    A["1. Tap shutter once"] --> B["Capture two real photos<br/>Sequential fallback when dual capture fails"]
+    B --> U["Ultrawide photo<br/>Wide view: our canvas"]
+    B --> M["Main 1x photo<br/>Reference for overlapping detail"]
+    U --> P["2. Prepare both photos<br/>Resize, orient, handle lens correction"]
+    M --> P
+    P --> C["3. Align the reference<br/>Map matching objects onto the ultrawide"]
+    C --> D["4. Check confidence<br/>Select regions that match reliably"]
+    U --> F["5. Fuse details<br/>Main detail in trusted regions<br/>Ultrawide pixels elsewhere"]
+    D --> F
+    F --> G["6. Save and compare<br/>Original ultrawide versus processed result"]
+    F -.-> H["Optional future AI enhancement<br/>No model included"]
+    H -.-> G
+```
+
+The ultrawide is the base photograph. The main camera provides a closer look at part of the same scene. Alignment lines up corresponding objects; confidence checks reject unreliable regions; multiscale fusion blends detail without a rectangular patch. If a region cannot be matched reliably, its original ultrawide pixels are retained. The outer view remains ultrawide. All processing stays on-device.
+
+AI is optional and currently absent. Reference coverage and pixel-change statistics indicate processing activity, not proven image-quality gains.
+
+## Open and run
 
 Requirements: Android Studio, JDK 17, Android SDK Platform 35, Build Tools (Gradle can install licensed missing components), and internet access for the initial Gradle dependency download. The checked-in Gradle wrapper uses Gradle 8.14. The app supports API 28+, targets API 35, and uses Camera2 directly.
 
