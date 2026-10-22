@@ -79,7 +79,9 @@ class CameraEngine(context: Context) : AutoCloseable {
     suspend fun capturePair(report: CameraReport, directory: File, displayDegrees: Int, progress: (String) -> Unit): List<CapturedFrame> {
         val candidates = (listOfNotNull(preferredPair) + pairCandidates(report)).distinctBy { it.first().captureSize }
         val attempts = JSONArray()
+        val started = android.os.SystemClock.elapsedRealtime()
         for (lenses in candidates) {
+            if (attempts.length() > 0 && android.os.SystemClock.elapsedRealtime() - started >= 10_000) break
             try {
                 progress("Trying dual streams at ${lenses.first().captureSize}…")
                 val frames = capture(lenses, directory, displayDegrees, progress)
@@ -98,7 +100,7 @@ class CameraEngine(context: Context) : AutoCloseable {
             }
         }
         preferences.edit().putBoolean(failureKey(report), true).apply()
-        error("Dual-stream delivery failed at all ${candidates.size} supported candidate sizes. Failure remembered; retry explicitly in Settings. See pair-attempts.json; using sequential capture.")
+        error("Dual-stream delivery failed after ${attempts.length()} attempt(s). Failure remembered; retry explicitly in Settings. See pair-attempts.json; using sequential capture.")
     }
 
     suspend fun probePair(report: CameraReport): PairSupport = lock.withLock {
@@ -161,7 +163,8 @@ class CameraEngine(context: Context) : AutoCloseable {
         val readers = mutableListOf<ImageReader>()
         var logicalReader: ImageReader? = null
         var phase = "Opening real camera lenses"
-        var frameMatchers: List<FrameMatcher<ByteArray>> = emptyList()
+        var frameMatchers: List<FrameMatcher<SensorPixels>> = emptyList()
+        var pairDiagnostic: (() -> String)? = null
         fun stage(message: String) { phase = message; progress(message) }
         try {
             stage("Opening real camera lenses…")
@@ -182,9 +185,17 @@ class CameraEngine(context: Context) : AutoCloseable {
                 listOfNotNull(logicalReader?.let { output(it.surface, null) })
             val signals = configure(camera, outputs)
             stage("Settling exposure and focus…")
-            val images = readers.map { CompletableDeferred<TimestampedFrame<ByteArray>>() }
-            val matchers = readers.map { FrameMatcher<ByteArray>() }
+            val images = readers.map { CompletableDeferred<TimestampedFrame<SensorPixels>>() }
+            val matchers = readers.map { FrameMatcher<SensorPixels>() }
             frameMatchers = matchers
+            val streamingPair = lenses.size == 2
+            val result = CompletableDeferred<TotalCaptureResult>()
+            val collector = PairFrameCollector<SensorPixels, TotalCaptureResult>()
+            pairDiagnostic = if (streamingPair) collector::diagnostic else null
+            fun accept(pair: CollectedPair<SensorPixels, TotalCaptureResult>?) {
+                if (pair == null || result.isCompleted) return
+                images[0].complete(pair.first); images[1].complete(pair.second); result.complete(pair.metadata)
+            }
             var captureArmed = false // Accessed only on cameraDispatcher / callback handler.
             readers.forEachIndexed { index, r -> r.setOnImageAvailableListener({ source ->
                 try {
@@ -194,7 +205,9 @@ class CameraEngine(context: Context) : AutoCloseable {
                         val image = source.acquireNextImage() ?: break
                         try {
                             if (captureArmed && !images[index].isCompleted) {
-                                matchers[index].image(image.timestamp, yuvJpeg(image))?.let { images[index].complete(it) }
+                                val pixels = yuvPixels(image)
+                                if (streamingPair) accept(collector.image(index, image.timestamp, pixels))
+                                else matchers[index].image(image.timestamp, pixels)?.let { images[index].complete(it) }
                             }
                         } finally { image.close() }
                     }
@@ -217,7 +230,6 @@ class CameraEngine(context: Context) : AutoCloseable {
             // Give each real lens time to settle exposure/focus after switching.
             delay(350)
             withTimeoutOrNull(1800) { settled.await() }
-            val streamingPair = lenses.size == 2
             if (!streamingPair) {
                 stage("Finishing warmup frames…")
                 signals.ready = CompletableDeferred()
@@ -225,7 +237,6 @@ class CameraEngine(context: Context) : AutoCloseable {
                 cameraDeadline("Stopping camera warmup", 5000) { signals.ready.await() }
             }
 
-            val result = CompletableDeferred<TotalCaptureResult>()
             var selectedFrameNumber: Long? = null
             val lostFrames = ArrayDeque<Long>()
             stage("Capturing ${lenses.size} real lens image${if (lenses.size == 1) "" else "s"}…")
@@ -245,6 +256,10 @@ class CameraEngine(context: Context) : AutoCloseable {
                         if (lenses.any { physicalResult(value, it).get(CaptureResult.SENSOR_TIMESTAMP) == null }) {
                             result.completeExceptionally(IllegalStateException("Dual request omitted physical sensor timestamps")); return
                         }
+                        accept(collector.result(value.frameNumber,
+                            physicalResult(value, lenses[0]).get(CaptureResult.SENSOR_TIMESTAMP)!!,
+                            physicalResult(value, lenses[1]).get(CaptureResult.SENSOR_TIMESTAMP)!!, value))
+                        return
                     }
                     lenses.forEachIndexed { index, lens ->
                         val timestamp = physicalResult(value, lens).get(CaptureResult.SENSOR_TIMESTAMP)
@@ -262,6 +277,7 @@ class CameraEngine(context: Context) : AutoCloseable {
                 override fun onCaptureBufferLost(s: CameraCaptureSession, r: CaptureRequest, target: Surface, frameNumber: Long) {
                     // Repeating capture may lose a later frame while our selected frame arrives.
                     if (streamingPair && selectedFrameNumber != frameNumber) {
+                        collector.reject(frameNumber)
                         lostFrames.addLast(frameNumber)
                         while (lostFrames.size > 16) lostFrames.removeFirst()
                         return
@@ -282,7 +298,7 @@ class CameraEngine(context: Context) : AutoCloseable {
                 stage("Saving camera inputs locally…")
                 images.mapIndexed { index, frame ->
                     val received = frame.await()
-                    val bytes = received.value; val timestamp = received.timestamp
+                    val pixels = received.value; val timestamp = received.timestamp
                     val selectedLens = lenses[index]
                     val physical = physicalResult(metadata, selectedLens)
                     val lens = selectedLens.copy(calibration = selectedLens.calibration.copy(
@@ -292,7 +308,7 @@ class CameraEngine(context: Context) : AutoCloseable {
                     val file = File(directory, if (lens.label == "Ultrawide") "ultrawide.jpg" else "main.jpg")
                     val rotation = (lens.sensorOrientation - displayDegrees + 360) % 360
                     withContext(Dispatchers.IO) {
-                        file.writeBytes(bytes)
+                        file.writeBytes(pixels.jpeg())
                         ExifInterface(file).apply {
                             setAttribute(ExifInterface.TAG_ORIENTATION, when (rotation) { 90 -> ExifInterface.ORIENTATION_ROTATE_90; 180 -> ExifInterface.ORIENTATION_ROTATE_180; 270 -> ExifInterface.ORIENTATION_ROTATE_270; else -> ExifInterface.ORIENTATION_NORMAL }.toString())
                             saveAttributes()
@@ -307,6 +323,7 @@ class CameraEngine(context: Context) : AutoCloseable {
         } catch (e: Exception) {
             val frameState = withContext(NonCancellable + cameraDispatcher) {
                 lenses.zip(frameMatchers).joinToString("\n") { (lens, frames) -> "${lens.label}: ${frames.diagnostic()}" }
+                    .plus(pairDiagnostic?.let { "\nDual window: ${it()}" }.orEmpty())
             }
             withContext(NonCancellable + Dispatchers.IO) {
                 runCatching { File(directory, "capture-error.txt").writeText("Stage: $phase\n$frameState\n${e.stackTraceToString()}") }
@@ -413,15 +430,18 @@ class CameraEngine(context: Context) : AutoCloseable {
     }
 
     companion object {
+        private data class SensorPixels(val width: Int, val height: Int, val nv21: ByteArray) {
+            fun jpeg(): ByteArray = java.io.ByteArrayOutputStream().use { output ->
+                check(YuvImage(nv21, ImageFormat.NV21, width, height, null).compressToJpeg(Rect(0, 0, width, height), 97, output))
+                output.toByteArray()
+            }
+        }
         /** Handles padded row strides and interleaved or planar chroma, without assuming NV21 input. */
-        private fun yuvJpeg(image: Image): ByteArray {
+        private fun yuvPixels(image: Image): SensorPixels {
             val crop = image.cropRect
             val w = crop.width(); val h = crop.height()
             val nv21 = YuvPlanes.toNv21(w, h, crop.left, crop.top, image.planes.map { PixelPlane(it.buffer.duplicate(), it.rowStride, it.pixelStride) })
-            return java.io.ByteArrayOutputStream().use { output ->
-                check(YuvImage(nv21, ImageFormat.NV21, w, h, null).compressToJpeg(Rect(0, 0, w, h), 97, output))
-                output.toByteArray()
-            }
+            return SensorPixels(w, h, nv21)
         }
     }
 }

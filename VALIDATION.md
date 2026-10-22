@@ -1,5 +1,24 @@
 # Validation record — 22 October 2026
 
+## Version 0.1.6: callback workload and timing diagnostics
+
+- Removed JPEG compression from image callbacks. Only selected inputs are JPEG-compressed, outside the camera callback thread. A bounded rolling collector selects two images with exact physical timestamps from a common capture result; its window retains at most three NV21 copies per lens and twelve metadata candidates. The existing 50 ms pair-gap limit remains in force.
+- Explicit dual retries stop starting additional size attempts once a 10-second search budget is exhausted. An active attempt and resource cleanup can exceed that budget. Existing remembered failures are preserved, so the user's ordinary next capture stays sequential rather than rerunning the experiment.
+- New result screens and metadata separate capture duration from processing duration. Actual dual delivery for this implementation remains unconfirmed until an explicit retry is requested in Settings.
+- Build/lint passed (0 errors; dependency-version warnings remain). v0.1.6/versionCode 7 was installed and launched on the Pixel without clearing data; its saved dual-failure preference was confirmed present after updating. A fresh normal-capture duration check is pending. Automated tests were not run for this version.
+
+Current v0.1.6 APK SHA-256:
+
+```text
+5481eeaa16c97bd5b189dd4a45ce1a4dbdb8bf8a32fe54dd3a21b662c917d50e
+```
+
+### Actual v0.1.5 capture observation
+
+All three dual sizes timed out. At 2048×1536 and 1280×960, both lens image callbacks and physical metadata were present, but a timestamp-matched pair was not selected; this is not evidence that the hardware cannot deliver both streams. JPEG compression in each incoming-frame callback and pinning the first result were identified as application-side weaknesses and changed in v0.1.6. Their contribution to the failure has not been measured separately.
+
+The fallback completed: session creation to both input saves was approximately 40 seconds; output metadata was written approximately 1–2 seconds later (second-resolution modification time). Sequential exposure gap was 1432.493094 ms. Confidence covered 27.60% of the canvas, 21.75% of pixels changed by the diagnostic threshold, and zero changes occurred outside mask support. Failure persistence was confirmed in the app's preferences. Photos stayed on-device.
+
 ## Version 0.1.5: logical preview experiment
 
 - Added a logical PRIVATE output alongside both physical YUV outputs. The logical frames are discarded, never saved as a lens input. This is an additional configuration experiment, not established simultaneous-capture support. The startup probe still checks only the two physical outputs; actual capture configures all three outputs.
@@ -7,7 +26,7 @@
 - Richer per-attempt diagnostics include the selected/observed image timestamps. Existing inputs/results remain on-device.
 - Build and lint passed (0 errors, 7 dependency-version warnings). Installed versionCode 6/versionName 0.1.5 was confirmed on the Pixel. Automated tests were not rerun. Actual delivery for the new three-output configuration is still pending a user-triggered capture.
 
-Current v0.1.5 APK SHA-256:
+Superseded v0.1.5 APK SHA-256:
 
 ```text
 573fedfe9bf8b7438dbac1ba06b2fe391502252a09b0f7dcbbb0505efef365ee

@@ -69,6 +69,10 @@ Physical PRIVATE preview streams are optional in Camera2. If a selected physical
 
 ## Baseline and component boundaries
 
+Capture callbacks retain a bounded window of NV21 image copies; JPEG compression runs only for the selected input images, outside the camera callback. Dual capture searches a rolling metadata/image window for an exact match from both physical sensors instead of pinning the first metadata result. Explicit dual retries stop starting new candidate attempts after a 10-second search budget; an in-progress attempt and cleanup can run longer. Remembered delivery failures stay in effect across app updates unless the strategy, OS, or camera routes change, or **Retry dual-camera detection** is selected.
+
+New results display separate capture and processing durations, also recorded in `processing.json`. Capture includes camera setup, settling, any dual attempts, fallback, and input saving. Processing includes preprocessing, alignment, fusion, optional inference, and output saving. Older sessions do not have these duration fields.
+
 | Component | Responsibility |
 |---|---|
 | `camera/CameraDiscovery.kt` | Camera2 inventory, two distinct lens endpoints, bounded stream sizes, calibration inventory |

@@ -122,6 +122,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         operation = viewModelScope.launch {
             val report = mutable.value.report!!
             val pair = mutable.value.usePair
+            val captureStarted = android.os.SystemClock.elapsedRealtime()
             mutable.update { it.copy(busy = true, capturing = true, error = null, progress = "Settling lens exposure and focus…") }
             try {
                 previewJob?.cancelAndJoin()
@@ -147,7 +148,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 wide = frames[0]; main = frames[1]
                 withContext(Dispatchers.IO) { store.metadata(directory, report, mutable.value.support, listOfNotNull(wide, main), simultaneous) }
                 mutable.update { it.copy(capturing = false, hasBothInputs = wide != null && main != null) }
-                processInputs(directory)
+                processInputs(directory, android.os.SystemClock.elapsedRealtime() - captureStarted)
             } catch (e: CancellationException) {
                 mutable.update { it.copy(progress = "Capture interrupted. Inputs already saved remain on the device.") }; throw e
             } catch (e: Exception) {
@@ -178,10 +179,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private suspend fun processInputs(directory: File) {
+    private suspend fun processInputs(directory: File, captureMs: Long? = null) {
         mutable.update { it.copy(capturing = false, stage = Stage.RESULT, progress = "Processing captured inputs…") }
+        val started = android.os.SystemClock.elapsedRealtime()
         val result = pipeline.process(wide!!, main!!, directory) { message -> mutable.update { it.copy(progress = message) } }
-        mutable.update { it.copy(result = result, progress = "Result saved locally. Compare before sharing.") }
+        val processingMs = android.os.SystemClock.elapsedRealtime() - started
+        val timing = listOfNotNull(captureMs?.let { "Capture: ${"%.1f".format(java.util.Locale.US, it / 1000.0)} s" },
+            "Processing: ${"%.1f".format(java.util.Locale.US, processingMs / 1000.0)} s").joinToString(" · ")
+        withContext(Dispatchers.IO) {
+            val file = File(directory, "processing.json")
+            val metadata = JSONObject(file.readText()).put("processingDurationMs", processingMs)
+            if (captureMs != null) metadata.put("captureDurationMs", captureMs)
+            metadata.put("notes", metadata.optString("notes") + "\n" + timing)
+            file.writeText(metadata.toString(2))
+        }
+        mutable.update { it.copy(result = result.copy(message = result.message + "\n\n" + timing), progress = "Result saved. $timing") }
         refreshSavedResults()
     }
 
