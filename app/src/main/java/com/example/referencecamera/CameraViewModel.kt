@@ -109,6 +109,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
     fun sequential(value: Boolean) { mutable.update { it.copy(forceSequential = value) } }
+    fun retryDual() {
+        if (mutable.value.busy) return
+        mutable.value.report?.let(engine::forgetPairFailure)
+        cancelPreview()
+        mutable.update { it.copy(report = null, support = null, forceSequential = false, error = null) }
+        initialize()
+    }
 
     fun capture(displayDegrees: Int) {
         if (mutable.value.busy || mutable.value.report == null) return

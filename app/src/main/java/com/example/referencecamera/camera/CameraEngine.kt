@@ -47,6 +47,7 @@ data class PreviewStatus(val lensSpecific: Boolean, val message: String)
 /** Owns all Camera2 resources. No capture uses CONTROL_ZOOM_RATIO or a synthetic crop. */
 class CameraEngine(context: Context) : AutoCloseable {
     private val manager = context.getSystemService(CameraManager::class.java)
+    private val preferences = context.getSharedPreferences("camera-strategies", Context.MODE_PRIVATE)
     private val thread = HandlerThread("camera2").apply { start() }
     private val handler = Handler(thread.looper)
     private val executor = Executor { handler.post(it) }
@@ -57,6 +58,8 @@ class CameraEngine(context: Context) : AutoCloseable {
     private var session: CameraCaptureSession? = null
     @Volatile private var disposed = false
     private var preferredPair: List<LensChoice>? = null
+    private fun failureKey(report: CameraReport) = "logical-preview-v1:${Build.FINGERPRINT}:${report.wide.route}:${report.main.route}"
+    fun forgetPairFailure(report: CameraReport) { preferences.edit().remove(failureKey(report)).apply() }
 
     private fun pairCandidates(report: CameraReport): List<List<LensChoice>> {
         val lenses = listOf(report.wide, report.main)
@@ -83,19 +86,23 @@ class CameraEngine(context: Context) : AutoCloseable {
                 val gap = kotlin.math.abs(frames[0].timestampNs - frames[1].timestampNs) / 1_000_000.0
                 require(gap <= 50.0) { "Dual exposure gap $gap ms exceeds the POC's 50 ms limit" }
                 preferredPair = lenses
+                preferences.edit().remove(failureKey(report)).apply()
                 attempts.put(JSONObject().put("size", lenses.first().captureSize.toString()).put("delivered", true).put("exposureGapMs", gap))
                 withContext(Dispatchers.IO) { File(directory, "pair-attempts.json").writeText(attempts.toString(2)) }
                 return frames
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                attempts.put(JSONObject().put("size", lenses.first().captureSize.toString()).put("delivered", false).put("error", e.message))
+                val diagnostic = withContext(Dispatchers.IO) { File(directory, "capture-error.txt").takeIf { it.exists() }?.readText()?.substringBefore("java.lang.") }
+                attempts.put(JSONObject().put("size", lenses.first().captureSize.toString()).put("delivered", false).put("error", e.message).put("diagnostic", diagnostic))
                 withContext(Dispatchers.IO) { File(directory, "pair-attempts.json").writeText(attempts.toString(2)) }
             }
         }
-        error("Dual-stream delivery failed at all ${candidates.size} supported candidate sizes. See pair-attempts.json; using sequential capture.")
+        preferences.edit().putBoolean(failureKey(report), true).apply()
+        error("Dual-stream delivery failed at all ${candidates.size} supported candidate sizes. Failure remembered; retry explicitly in Settings. See pair-attempts.json; using sequential capture.")
     }
 
     suspend fun probePair(report: CameraReport): PairSupport = lock.withLock {
+        if (preferences.getBoolean(failureKey(report), false)) return@withLock PairSupport(false, "Dual-stream delivery previously failed on this camera/OS configuration. Using sequential capture without repeating the slow attempts. Settings can retry dual detection.")
         val wide = report.wide; val main = report.main
         if (wide.logicalId != main.logicalId || wide.physicalId == null || main.physicalId == null) {
             return@withLock PairSupport(false, "No shared logical camera exposes both selected physical lenses. Concurrent logical sets: ${report.concurrentLogicalSets}. This POC uses sequential capture for separate devices.")
@@ -152,6 +159,7 @@ class CameraEngine(context: Context) : AutoCloseable {
     suspend fun capture(lenses: List<LensChoice>, directory: File, displayDegrees: Int, progress: (String) -> Unit = {}): List<CapturedFrame> = lock.withLock {
         require(lenses.isNotEmpty() && lenses.map { it.logicalId }.distinct().size == 1)
         val readers = mutableListOf<ImageReader>()
+        var logicalReader: ImageReader? = null
         var phase = "Opening real camera lenses"
         var frameMatchers: List<FrameMatcher<ByteArray>> = emptyList()
         fun stage(message: String) { phase = message; progress(message) }
@@ -160,7 +168,19 @@ class CameraEngine(context: Context) : AutoCloseable {
             lenses.forEach { readers += reader(it) }
             disconnect()
             val camera = open(lenses.first().logicalId)
-            val signals = configure(camera, readers.zip(lenses).map { (r, lens) -> output(r.surface, lens.physicalId, true) })
+            // Keep a logical PRIVATE stream alongside the two physical YUV outputs.
+            // Its frames are discarded and can never become either saved camera input.
+            if (lenses.size == 2) {
+                val map = manager.getCameraCharacteristics(lenses.first().logicalId).get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                val size = map?.getOutputSizes(ImageFormat.PRIVATE)?.filter { maxOf(it.width, it.height) <= 640 }
+                    ?.maxByOrNull { it.width * it.height } ?: error("No bounded logical PRIVATE output advertised")
+                logicalReader = ImageReader.newInstance(size.width, size.height, ImageFormat.PRIVATE, 2).apply {
+                    setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, handler)
+                }
+            }
+            val outputs = readers.zip(lenses).map { (r, lens) -> output(r.surface, lens.physicalId, true) } +
+                listOfNotNull(logicalReader?.let { output(it.surface, null) })
+            val signals = configure(camera, outputs)
             stage("Settling exposure and focus…")
             val images = readers.map { CompletableDeferred<TimestampedFrame<ByteArray>>() }
             val matchers = readers.map { FrameMatcher<ByteArray>() }
@@ -184,6 +204,7 @@ class CameraEngine(context: Context) : AutoCloseable {
             val settled = CompletableDeferred<Unit>()
             val previewRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 readers.forEach { addTarget(it.surface) }; controls(lenses)
+                logicalReader?.let { addTarget(it.surface) }
             }.build()
             signals.session.setRepeatingRequest(previewRequest, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, result: TotalCaptureResult) {
@@ -210,6 +231,7 @@ class CameraEngine(context: Context) : AutoCloseable {
             stage("Capturing ${lenses.size} real lens image${if (lenses.size == 1) "" else "s"}…")
             val request = camera.createCaptureRequest(if (streamingPair) CameraDevice.TEMPLATE_PREVIEW else CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 readers.forEach { addTarget(it.surface) }; controls(lenses)
+                logicalReader?.let { addTarget(it.surface) }
             }.build()
             val callback = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, value: TotalCaptureResult) {
@@ -291,7 +313,7 @@ class CameraEngine(context: Context) : AutoCloseable {
             }
             throw e
         } finally {
-            withContext(NonCancellable) { disconnect(); releaseReaders(readers) }
+            withContext(NonCancellable) { disconnect(); releaseReaders(readers + listOfNotNull(logicalReader)) }
         }
     }
 

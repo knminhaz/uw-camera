@@ -1,5 +1,24 @@
 # Validation record — 22 October 2026
 
+## Version 0.1.5: logical preview experiment
+
+- Added a logical PRIVATE output alongside both physical YUV outputs. The logical frames are discarded, never saved as a lens input. This is an additional configuration experiment, not established simultaneous-capture support. The startup probe still checks only the two physical outputs; actual capture configures all three outputs.
+- Dual-delivery failure is remembered across restarts for the strategy, camera routes, and OS build. Subsequent normal captures use the sequential path directly. Settings provides an explicit retry action. The first diagnostic attempt can still be slow if all candidate sizes time out.
+- Richer per-attempt diagnostics include the selected/observed image timestamps. Existing inputs/results remain on-device.
+- Build and lint passed (0 errors, 7 dependency-version warnings). Installed versionCode 6/versionName 0.1.5 was confirmed on the Pixel. Automated tests were not rerun. Actual delivery for the new three-output configuration is still pending a user-triggered capture.
+
+Current v0.1.5 APK SHA-256:
+
+```text
+573fedfe9bf8b7438dbac1ba06b2fe391502252a09b0f7dcbbb0505efef365ee
+```
+
+## Actual v0.1.4 capture observation
+
+The user triggered a capture. Both-only repeating streams timed out at 2048×1536, 1280×960, and 640×480. Last-attempt diagnostics showed main-camera image callbacks and no ultrawide images; no usable paired metadata was selected. The automatic sequential fallback then completed.
+
+Session creation to both saved inputs was approximately 52 seconds, mostly unsuccessful dual capture attempts. The processing metadata file was written approximately 4 seconds after the main input was saved (file modification time is second-resolution, so this is an estimate). Sequential exposure gap was 1680.70615 ms. Alignment accepted 746/959 homography inliers; confidence covered 23.89% of the canvas, with 19.10% of baseline pixels changed by at least 2/255 and zero changed pixels outside mask support. These are activity/integrity diagnostics, not image-quality scores. No photos were copied off the phone.
+
 ## Version 0.1.4: dual repeating-stream capture
 
 The high-level flow diagram was pushed to the main README before this work started.
@@ -10,7 +29,7 @@ The high-level flow diagram was pushed to the main README before this work start
 - Image callback work is bounded so repeating frames do not indefinitely block metadata handling. Buffer-loss callbacks for other frame numbers do not reject an already selected frame pair.
 - Build and lint passed (0 errors, 7 dependency-version warnings); v0.1.4 was installed and launched on the Pixel without clearing saved sessions. The new on-device report confirmed a 640×480 dual session configured with query=true, and candidates 2048×1536, 1280×960, and 640×480. Real dual image delivery and its measured timing still require a shutter capture; older sequential results do not validate this new path. No new photographic quality claim is made. Automated tests were not rerun for this version.
 
-Current v0.1.4 APK SHA-256:
+Superseded v0.1.4 APK SHA-256:
 
 ```text
 fdda14f11a32c1a8741d2bb60e692c10aa6afb88be095923441d8298ae03d0c7

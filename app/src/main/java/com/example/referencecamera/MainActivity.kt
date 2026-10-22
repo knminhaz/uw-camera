@@ -154,6 +154,7 @@ private fun CameraApp(controller: CameraViewModel, displayDegrees: () -> Int, sh
             }
             InfoCard("Optional AI model", if (state.modelInstalled) "A model file is installed. Its input/output contract is checked during processing; incompatible models leave the OpenCV baseline available."
                 else "OpenCV processing works without a model. Import is only for a trusted reference-SR ONNX model matching the documented contract. Arbitrary .onnx files will not work.")
+            OutlinedButton(onClick = { showSettings = false; controller.retryDual() }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Retry dual-camera detection") }
             OutlinedButton(onClick = { importModel.launch(arrayOf("application/octet-stream", "application/onnx", "*/*")) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Advanced: import ONNX model (optional)") }
             InfoCard("Where results are saved", "Completed comparisons are in Results at the bottom left of the camera screen. Export PNG saves a copy to a folder you choose in Files. App-private originals do not appear in Photos automatically.")
             state.error?.let { InfoCard("Last error", it) }
