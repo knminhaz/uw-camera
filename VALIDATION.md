@@ -1,5 +1,21 @@
 # Validation record — 22 October 2026
 
+## Version 0.1.4: dual repeating-stream capture
+
+The high-level flow diagram was pushed to the main README before this work started.
+
+- Replaced the pair's still-capture request with a repeating YUV request targeting both physical lenses. Both saved frames must match physical timestamps from the same capture result. Metadata from the logical camera cannot substitute for missing physical metadata in this path.
+- Added descending common 4:3 stream-size candidates at caps of 2048, 1280, and 640 pixels. Candidates come from the intersection of both physical cameras' and the logical camera's advertised YUV sizes. Session probing uses the smallest candidate and explicitly does not claim frame delivery.
+- Successful pairs must have an exposure gap of at most 50 ms, a POC acceptance threshold. Actual size and timing are recorded; exact exposure synchronization remains device-dependent. Failures are saved in `pair-attempts.json`, followed by the existing automatic sequential fallback.
+- Image callback work is bounded so repeating frames do not indefinitely block metadata handling. Buffer-loss callbacks for other frame numbers do not reject an already selected frame pair.
+- Build and lint passed (0 errors, 7 dependency-version warnings); v0.1.4 was installed and launched on the Pixel without clearing saved sessions. The new on-device report confirmed a 640×480 dual session configured with query=true, and candidates 2048×1536, 1280×960, and 640×480. Real dual image delivery and its measured timing still require a shutter capture; older sequential results do not validate this new path. No new photographic quality claim is made. Automated tests were not rerun for this version.
+
+Current v0.1.4 APK SHA-256:
+
+```text
+fdda14f11a32c1a8741d2bb60e692c10aa6afb88be095923441d8298ae03d0c7
+```
+
 ## Version 0.1.3 update
 
 - Built and installed on the connected Pixel 7 without clearing saved sessions. Lint passed; 10 JVM checks and 9 synthetic image/storage instrumentation checks passed.
@@ -8,7 +24,7 @@
 - Actual saved capture metadata confirmed sequential delivery from both physical lenses and accepted reference fusion: one session had 798/1045 homography inliers, approximately 10% reliable canvas coverage, and approximately 1.79 seconds between exposures. The pair request configured but lost the main buffer; the automatic sequential fallback completed. Only metadata was inspected; camera images remain on the phone.
 - Preview orientation still needs the user's visual confirmation. No measured photographic improvement or compatible ONNX model inference is established.
 
-Current v0.1.3 APK SHA-256:
+Superseded v0.1.3 APK SHA-256:
 
 ```text
 3aceb87d154810becc5fa56cc7bc6ea6c0a1d9c8a3942c5c2a95ec4c281bce93

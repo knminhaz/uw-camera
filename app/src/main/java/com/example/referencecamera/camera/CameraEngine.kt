@@ -56,6 +56,44 @@ class CameraEngine(context: Context) : AutoCloseable {
     private var deviceClosed: CompletableDeferred<Unit>? = null
     private var session: CameraCaptureSession? = null
     @Volatile private var disposed = false
+    private var preferredPair: List<LensChoice>? = null
+
+    private fun pairCandidates(report: CameraReport): List<List<LensChoice>> {
+        val lenses = listOf(report.wide, report.main)
+        if (lenses.any { it.physicalId == null } || lenses.map { it.logicalId }.distinct().size != 1) return emptyList()
+        val common = (lenses.map { lens ->
+            manager.getCameraCharacteristics(lens.endpoint).get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputSizes(ImageFormat.YUV_420_888)?.toSet().orEmpty()
+        } + listOf(manager.getCameraCharacteristics(report.wide.logicalId).get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?.getOutputSizes(ImageFormat.YUV_420_888)?.toSet().orEmpty())).reduce { a, b -> a intersect b }
+        val sizes = listOf(2048, 1280, 640).mapNotNull { edge -> common
+            .filter { maxOf(it.width, it.height) <= edge && kotlin.math.abs(it.width.toDouble() / it.height - 4.0 / 3.0) < .04 }
+            .maxByOrNull { it.width.toLong() * it.height } }.distinct()
+        return sizes.map { size -> lenses.map { it.copy(captureSize = size) } }
+    }
+
+    /** Tries actual frame delivery; configuration acceptance alone is insufficient. */
+    suspend fun capturePair(report: CameraReport, directory: File, displayDegrees: Int, progress: (String) -> Unit): List<CapturedFrame> {
+        val candidates = (listOfNotNull(preferredPair) + pairCandidates(report)).distinctBy { it.first().captureSize }
+        val attempts = JSONArray()
+        for (lenses in candidates) {
+            try {
+                progress("Trying dual streams at ${lenses.first().captureSize}…")
+                val frames = capture(lenses, directory, displayDegrees, progress)
+                val gap = kotlin.math.abs(frames[0].timestampNs - frames[1].timestampNs) / 1_000_000.0
+                require(gap <= 50.0) { "Dual exposure gap $gap ms exceeds the POC's 50 ms limit" }
+                preferredPair = lenses
+                attempts.put(JSONObject().put("size", lenses.first().captureSize.toString()).put("delivered", true).put("exposureGapMs", gap))
+                withContext(Dispatchers.IO) { File(directory, "pair-attempts.json").writeText(attempts.toString(2)) }
+                return frames
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                attempts.put(JSONObject().put("size", lenses.first().captureSize.toString()).put("delivered", false).put("error", e.message))
+                withContext(Dispatchers.IO) { File(directory, "pair-attempts.json").writeText(attempts.toString(2)) }
+            }
+        }
+        error("Dual-stream delivery failed at all ${candidates.size} supported candidate sizes. See pair-attempts.json; using sequential capture.")
+    }
 
     suspend fun probePair(report: CameraReport): PairSupport = lock.withLock {
         val wide = report.wide; val main = report.main
@@ -64,16 +102,19 @@ class CameraEngine(context: Context) : AutoCloseable {
         }
         val readers = mutableListOf<ImageReader>()
         try {
-            listOf(wide, main).forEach { readers += reader(it) }
+            val candidates = pairCandidates(report)
+            require(candidates.isNotEmpty()) { "No common bounded 4:3 YUV size is advertised by both physical lenses and the logical camera" }
+            val selected = candidates.last()
+            selected.forEach { readers += reader(it) }
             disconnect()
             val camera = open(wide.logicalId)
-            val outputs = readers.zip(listOf(wide, main)).map { (r, lens) -> output(r.surface, lens.physicalId, true) }
+            val outputs = readers.zip(selected).map { (r, lens) -> output(r.surface, lens.physicalId, true) }
             val query = if (Build.VERSION.SDK_INT >= 29) runCatching {
                 camera.isSessionConfigurationSupported(configuration(outputs, SessionSignals()))
             }.getOrNull() else null
             // A query may be unimplemented. An actual configure attempt is the final check.
             configure(camera, outputs)
-            PairSupport(true, "Two physical YUV streams configured successfully (${wide.captureSize} + ${main.captureSize}); query=$query. Sensor synchronization: ${report.syncType}. Same-request capture is available; timestamps are saved for inspection.")
+            PairSupport(true, "Dual physical YUV configuration accepted at ${selected.first().captureSize}; query=$query. Delivery is unverified until capture. Candidate sizes: ${candidates.map { it.first().captureSize }}. Sensor synchronization: ${report.syncType}.")
         } catch (e: Exception) {
             if (e is CancellationException && e !is TimeoutCancellationException) throw e
             PairSupport(false, "Dual physical YUV session unavailable: ${e.message}. Use two sequential shots; motion and parallax can prevent fusion.")
@@ -127,7 +168,9 @@ class CameraEngine(context: Context) : AutoCloseable {
             var captureArmed = false // Accessed only on cameraDispatcher / callback handler.
             readers.forEachIndexed { index, r -> r.setOnImageAvailableListener({ source ->
                 try {
-                    while (true) {
+                    // Bound work so repeating image delivery cannot starve result callbacks.
+                    var drained = 0
+                    while (drained++ < 2) {
                         val image = source.acquireNextImage() ?: break
                         try {
                             if (captureArmed && !images[index].isCompleted) {
@@ -153,22 +196,39 @@ class CameraEngine(context: Context) : AutoCloseable {
             // Give each real lens time to settle exposure/focus after switching.
             delay(350)
             withTimeoutOrNull(1800) { settled.await() }
-            stage("Finishing warmup frames…")
-            signals.ready = CompletableDeferred()
-            signals.session.stopRepeating()
-            cameraDeadline("Stopping camera warmup", 5000) { signals.ready.await() }
+            val streamingPair = lenses.size == 2
+            if (!streamingPair) {
+                stage("Finishing warmup frames…")
+                signals.ready = CompletableDeferred()
+                signals.session.stopRepeating()
+                cameraDeadline("Stopping camera warmup", 5000) { signals.ready.await() }
+            }
 
             val result = CompletableDeferred<TotalCaptureResult>()
+            var selectedFrameNumber: Long? = null
+            val lostFrames = ArrayDeque<Long>()
             stage("Capturing ${lenses.size} real lens image${if (lenses.size == 1) "" else "s"}…")
-            val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+            val request = camera.createCaptureRequest(if (streamingPair) CameraDevice.TEMPLATE_PREVIEW else CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 readers.forEach { addTarget(it.surface) }; controls(lenses)
             }.build()
             val callback = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, value: TotalCaptureResult) {
+                    if (result.isCompleted) return
+                    if (value.frameNumber in lostFrames) return
+                    if (streamingPair) {
+                        val physical = if (Build.VERSION.SDK_INT >= 31) value.physicalCameraTotalResults.keys else value.physicalCameraResults.keys
+                        if (lenses.any { it.physicalId !in physical }) {
+                            result.completeExceptionally(IllegalStateException("Dual request omitted physical camera metadata")); return
+                        }
+                        if (lenses.any { physicalResult(value, it).get(CaptureResult.SENSOR_TIMESTAMP) == null }) {
+                            result.completeExceptionally(IllegalStateException("Dual request omitted physical sensor timestamps")); return
+                        }
+                    }
                     lenses.forEachIndexed { index, lens ->
                         val timestamp = physicalResult(value, lens).get(CaptureResult.SENSOR_TIMESTAMP)
                         matchers[index].result(timestamp)?.let { images[index].complete(it) }
                     }
+                    selectedFrameNumber = value.frameNumber
                     result.complete(value)
                 }
                 override fun onCaptureFailed(s: CameraCaptureSession, r: CaptureRequest, failure: CaptureFailure) {
@@ -178,17 +238,24 @@ class CameraEngine(context: Context) : AutoCloseable {
                     result.completeExceptionally(IllegalStateException("Camera2 aborted the still capture sequence"))
                 }
                 override fun onCaptureBufferLost(s: CameraCaptureSession, r: CaptureRequest, target: Surface, frameNumber: Long) {
+                    // Repeating capture may lose a later frame while our selected frame arrives.
+                    if (streamingPair && selectedFrameNumber != frameNumber) {
+                        lostFrames.addLast(frameNumber)
+                        while (lostFrames.size > 16) lostFrames.removeFirst()
+                        return
+                    }
                     val index = readers.indexOfFirst { it.surface == target }
                     if (index >= 0) images[index].completeExceptionally(IllegalStateException("Camera2 lost the ${lenses[index].label} image buffer"))
                 }
             }
             withContext(cameraDispatcher) {
                 // Do not swap listeners. Drain and arm on the same thread as image delivery.
-                readers.forEach { reader -> while (true) { val stale = reader.acquireNextImage() ?: break; stale.close() } }
+                readers.forEach { reader -> repeat(4) { reader.acquireNextImage()?.close() } }
                 captureArmed = true
-                signals.session.capture(request, callback, handler)
+                if (streamingPair) signals.session.setRepeatingRequest(request, callback, handler)
+                else signals.session.capture(request, callback, handler)
             }
-            cameraDeadline("Receiving still images and capture metadata", 15_000) {
+            cameraDeadline("Receiving camera images and capture metadata", if (streamingPair) 5000 else 15_000) {
                 val metadata = result.await()
                 stage("Saving camera inputs locally…")
                 images.mapIndexed { index, frame ->

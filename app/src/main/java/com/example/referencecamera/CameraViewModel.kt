@@ -124,8 +124,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 wide = null; main = null
                 val frames = if (pair) {
                     try {
-                        engine.capture(listOf(report.wide, report.main), directory, displayDegrees) { message -> mutable.update { it.copy(progress = message) } }
-                            .also { simultaneous = true }
+                        engine.capturePair(report, directory, displayDegrees) { message -> mutable.update { it.copy(progress = message) } }
+                            .also { frames ->
+                                simultaneous = true
+                                val gap = kotlin.math.abs(frames[0].timestampNs - frames[1].timestampNs) / 1_000_000.0
+                                mutable.update { it.copy(support = PairSupport(true, "Dual-stream images delivered at ${frames[0].lens.captureSize}; measured exposure gap $gap ms. Synchronization: ${report.syncType}.")) }
+                            }
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         mutable.update { it.copy(support = PairSupport(false, "Pair capture failed: ${e.message}. Automatic sequential capture is active."), forceSequential = true,

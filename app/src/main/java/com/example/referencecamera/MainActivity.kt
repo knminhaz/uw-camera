@@ -198,7 +198,7 @@ private fun CameraApp(controller: CameraViewModel, displayDegrees: () -> Int, sh
     Column(Modifier.fillMaxSize().background(Color.Black).windowInsetsPadding(WindowInsets.safeDrawing)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Text("REFERENCE CAMERA", color = Color.White, style = MaterialTheme.typography.labelLarge)
-            Text(if (state.usePair) "DUAL LENS" else "SEQUENTIAL", color = Color(0xFFFFD66E), style = MaterialTheme.typography.labelMedium)
+            Text(if (state.usePair) "DUAL REQUEST" else "SEQUENTIAL", color = Color(0xFFFFD66E), style = MaterialTheme.typography.labelMedium)
         }
         Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black), contentAlignment = Alignment.Center) {
             val lens = state.previewLens

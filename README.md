@@ -4,8 +4,6 @@ Native Kotlin Android research app for a Pixel 7. It captures a real ultrawide f
 
 **Image-quality improvement has not been established.** The connected Pixel 7 exposed ultrawide physical ID 3 and main physical ID 2 behind logical ID 0. Its two 2048×1536 YUV streams configured, but the actual pair request lost the main image buffer. Automatic sequential capture produced completed results. One recorded session had about 1.79 seconds between inputs and about 10% reliable reference coverage; these observations are not quality measurements.
 
-## Open and run
- 
 ## How it works: the main idea
 
 Keep the ultrawide photo's full view, and borrow main-camera detail only where the two photos match reliably.
@@ -53,7 +51,7 @@ The app does not need photo-library or storage permission. Its inputs and result
 
 1. The app lists logical camera IDs, their physical IDs, focal lengths, sensor sizes, YUV/JPEG stream sizes, and advertised concurrent logical-camera sets. It selects two distinct rear lenses using focal length relative to sensor width, preferring a shared logical camera. IDs and zoom ratios are never hardcoded.
 2. It opens the logical camera, queries the two selected physical YUV stream configuration where the API implements that query, and attempts to configure that exact session. A successful configure is recorded as evidence for that particular combination of format and sizes. It does not establish support for every stream combination.
-3. Press the round shutter **once**. If the pair session configured, the app warms up both cameras and sends a single request to the two physical outputs. Exposure timestamps and synchronization metadata are saved.
+3. Press the round shutter **once**. The app attempts dual repeating YUV requests, selecting the two images associated with one capture result. It tries common 4:3 sizes advertised by both physical cameras and the logical camera, using descending size caps of 2048, 1280, and 640 pixels. Both physical metadata entries and sensor timestamps are required. A pair is accepted only if its measured exposure gap is at most 50 ms (an explicit POC threshold, not exact synchronization). The last successful size is preferred for subsequent captures during that app session. Configuration acceptance alone is labeled as unverified delivery.
 4. If a pair is unavailable or that capture fails, the app automatically captures ultrawide followed by main. No second shutter tap is required. **SEQUENTIAL** and step-by-step progress make the timing limitation visible. Keep the phone and scene still until both images finish saving. Settings can also force the sequential method.
 5. OpenCV immediately processes both saved images on a worker dispatcher. The app opens the original/result comparison, processing status, and export actions. Reopen completed images with the bottom-left **Results** gallery button, including after restarting the app. The result screen explicitly distinguishes reference fusion, optional ONNX output, and a retained ultrawide when alignment is unreliable.
 
@@ -119,6 +117,7 @@ Each capture session is stored under `files/captures/<time>-<id>/`:
 
 - `ultrawide.jpg`, `main.jpg`: original camera YUV inputs encoded locally as JPEG quality 97, with EXIF orientation. These are not Google Camera HDR+ images or sensor RAW files.
 - `capture.json`: logical/physical routes, selected stream sizes, calibration, actual crop/correction/focal-length metadata, capture mode, sensor timestamps, and wall-clock times.
+- `pair-attempts.json`: dual repeating-stream sizes attempted, delivery errors, and successful exposure gap. Dual capture can trade resolution for delivery; final input sizes and timing also appear in Processing details. The same-result frame pair is selected using exact image-to-physical-metadata timestamp matching; independent stream frames are not paired by callback arrival order.
 - `capture-error.txt`, if capture fails: the stage and exception details. Operational timeouts are shown as errors; lifecycle cancellation is reported as interruption. A timestamp-rejected image is retained for diagnosis before the rejection is reported.
 - `comparison-original.png`: oriented, resized ultrawide before optional geometric correction.
 - `aligned-reference.jpg`, `confidence.png`: alignment and mask diagnostics.

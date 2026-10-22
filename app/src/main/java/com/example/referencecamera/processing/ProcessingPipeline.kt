@@ -61,6 +61,7 @@ class ProcessingPipeline(private val enhancer: ReferenceEnhancer) {
                         try { check(Imgcodecs.imwrite(output.absolutePath, enhancement.image ?: baselineImage)) { "Cannot save result" } }
                         finally { enhancement.image?.release() }
                         val notes = listOf(alignment.diagnostic, "Ultrawide: ${wide.correction}", "Main: ${main.correction}", enhancement.message,
+                            "Input exposure gap: ${kotlin.math.abs(wideFrame.timestampNs - mainFrame.timestampNs) / 1_000_000.0} ms. Capture sizes: ${wideFrame.lens.captureSize} / ${mainFrame.lens.captureSize}.",
                             "Output ${wide.image.cols()}×${wide.image.rows()}; ultrawide canvas retained. Inputs are YUV frames encoded locally as JPEG, without Google Camera computational processing.")
                         File(directory, "processing.json").writeText(JSONObject().apply {
                             put("alignmentAccepted", alignment.accepted); put("notes", notes.joinToString("\n")); put("canvasMaxEdge", maxEdge)
