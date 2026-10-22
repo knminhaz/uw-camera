@@ -67,7 +67,7 @@ class CameraEngine(context: Context) : AutoCloseable {
             listOf(wide, main).forEach { readers += reader(it) }
             disconnect()
             val camera = open(wide.logicalId)
-            val outputs = readers.zip(listOf(wide, main)).map { (r, lens) -> output(r.surface, lens.physicalId) }
+            val outputs = readers.zip(listOf(wide, main)).map { (r, lens) -> output(r.surface, lens.physicalId, true) }
             val query = if (Build.VERSION.SDK_INT >= 29) runCatching {
                 camera.isSessionConfigurationSupported(configuration(outputs, SessionSignals()))
             }.getOrNull() else null
@@ -108,16 +108,35 @@ class CameraEngine(context: Context) : AutoCloseable {
         }
     }
 
-    suspend fun capture(lenses: List<LensChoice>, directory: File, displayDegrees: Int): List<CapturedFrame> = lock.withLock {
+    suspend fun capture(lenses: List<LensChoice>, directory: File, displayDegrees: Int, progress: (String) -> Unit = {}): List<CapturedFrame> = lock.withLock {
         require(lenses.isNotEmpty() && lenses.map { it.logicalId }.distinct().size == 1)
         val readers = mutableListOf<ImageReader>()
+        var phase = "Opening real camera lenses"
+        var frameMatchers: List<FrameMatcher<ByteArray>> = emptyList()
+        fun stage(message: String) { phase = message; progress(message) }
         try {
+            stage("Opening real camera lenses…")
             lenses.forEach { readers += reader(it) }
             disconnect()
             val camera = open(lenses.first().logicalId)
-            val signals = configure(camera, readers.zip(lenses).map { (r, lens) -> output(r.surface, lens.physicalId) })
-            readers.forEach { r -> r.setOnImageAvailableListener({ source ->
-                try { source.acquireLatestImage()?.close() } catch (_: IllegalStateException) { /* Closing reader. */ }
+            val signals = configure(camera, readers.zip(lenses).map { (r, lens) -> output(r.surface, lens.physicalId, true) })
+            stage("Settling exposure and focus…")
+            val images = readers.map { CompletableDeferred<TimestampedFrame<ByteArray>>() }
+            val matchers = readers.map { FrameMatcher<ByteArray>() }
+            frameMatchers = matchers
+            var captureArmed = false // Accessed only on cameraDispatcher / callback handler.
+            readers.forEachIndexed { index, r -> r.setOnImageAvailableListener({ source ->
+                try {
+                    while (true) {
+                        val image = source.acquireNextImage() ?: break
+                        try {
+                            if (captureArmed && !images[index].isCompleted) {
+                                matchers[index].image(image.timestamp, yuvJpeg(image))?.let { images[index].complete(it) }
+                            }
+                        } finally { image.close() }
+                    }
+                } catch (e: Exception) { images[index].completeExceptionally(e) }
+                catch (e: OutOfMemoryError) { images[index].completeExceptionally(e) }
             }, handler) }
             val settled = CompletableDeferred<Unit>()
             val previewRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
@@ -134,47 +153,53 @@ class CameraEngine(context: Context) : AutoCloseable {
             // Give each real lens time to settle exposure/focus after switching.
             delay(350)
             withTimeoutOrNull(1800) { settled.await() }
+            stage("Finishing warmup frames…")
             signals.ready = CompletableDeferred()
             signals.session.stopRepeating()
-            withTimeout(5000) { signals.ready.await() }
+            cameraDeadline("Stopping camera warmup", 5000) { signals.ready.await() }
 
-            val images = readers.map { CompletableDeferred<Pair<ByteArray, Long>>() }
-            readers.forEachIndexed { index, r ->
-                while (true) { val old = r.acquireLatestImage() ?: break; old.close() }
-                r.setOnImageAvailableListener({ source ->
-                    var image: Image? = null
-                    try {
-                        image = source.acquireNextImage() ?: return@setOnImageAvailableListener
-                        if (!images[index].isCompleted) images[index].complete(yuvJpeg(image) to image.timestamp)
-                    } catch (e: Exception) { images[index].completeExceptionally(e) }
-                    catch (e: OutOfMemoryError) { images[index].completeExceptionally(e) }
-                    finally { image?.close() }
-                }, handler)
-            }
             val result = CompletableDeferred<TotalCaptureResult>()
+            stage("Capturing ${lenses.size} real lens image${if (lenses.size == 1) "" else "s"}…")
             val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 readers.forEach { addTarget(it.surface) }; controls(lenses)
             }.build()
-            signals.session.capture(request, object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, value: TotalCaptureResult) { result.complete(value) }
+            val callback = object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, value: TotalCaptureResult) {
+                    lenses.forEachIndexed { index, lens ->
+                        val timestamp = physicalResult(value, lens).get(CaptureResult.SENSOR_TIMESTAMP)
+                        matchers[index].result(timestamp)?.let { images[index].complete(it) }
+                    }
+                    result.complete(value)
+                }
                 override fun onCaptureFailed(s: CameraCaptureSession, r: CaptureRequest, failure: CaptureFailure) {
                     result.completeExceptionally(IllegalStateException("Still capture failed (reason ${failure.reason})"))
                 }
-            }, handler)
-            withTimeout(15_000) {
+                override fun onCaptureSequenceAborted(s: CameraCaptureSession, sequenceId: Int) {
+                    result.completeExceptionally(IllegalStateException("Camera2 aborted the still capture sequence"))
+                }
+                override fun onCaptureBufferLost(s: CameraCaptureSession, r: CaptureRequest, target: Surface, frameNumber: Long) {
+                    val index = readers.indexOfFirst { it.surface == target }
+                    if (index >= 0) images[index].completeExceptionally(IllegalStateException("Camera2 lost the ${lenses[index].label} image buffer"))
+                }
+            }
+            withContext(cameraDispatcher) {
+                // Do not swap listeners. Drain and arm on the same thread as image delivery.
+                readers.forEach { reader -> while (true) { val stale = reader.acquireNextImage() ?: break; stale.close() } }
+                captureArmed = true
+                signals.session.capture(request, callback, handler)
+            }
+            cameraDeadline("Receiving still images and capture metadata", 15_000) {
                 val metadata = result.await()
+                stage("Saving camera inputs locally…")
                 images.mapIndexed { index, frame ->
-                    val (bytes, timestamp) = frame.await()
+                    val received = frame.await()
+                    val bytes = received.value; val timestamp = received.timestamp
                     val selectedLens = lenses[index]
-                    @Suppress("DEPRECATION")
-                    val physical: CaptureResult = selectedLens.physicalId?.let { id ->
-                        if (Build.VERSION.SDK_INT >= 31) metadata.physicalCameraTotalResults[id] else metadata.physicalCameraResults[id]
-                    } ?: metadata
+                    val physical = physicalResult(metadata, selectedLens)
                     val lens = selectedLens.copy(calibration = selectedLens.calibration.copy(
                         intrinsics = physical.get(CaptureResult.LENS_INTRINSIC_CALIBRATION) ?: selectedLens.calibration.intrinsics,
                         distortion = physical.get(CaptureResult.LENS_DISTORTION) ?: selectedLens.calibration.distortion))
                     val expectedTimestamp = physical.get(CaptureResult.SENSOR_TIMESTAMP)
-                    require(expectedTimestamp == null || expectedTimestamp == timestamp) { "Capture timestamp mismatch; frame rejected." }
                     val file = File(directory, if (lens.label == "Ultrawide") "ultrawide.jpg" else "main.jpg")
                     val rotation = (lens.sensorOrientation - displayDegrees + 360) % 360
                     withContext(Dispatchers.IO) {
@@ -184,11 +209,20 @@ class CameraEngine(context: Context) : AutoCloseable {
                             saveAttributes()
                         }
                     }
+                    require(expectedTimestamp == null || expectedTimestamp == timestamp) { "${lens.label} timestamp mismatch (image=$timestamp, result=$expectedTimestamp). Input saved for diagnosis; reference rejected." }
                     CapturedFrame(file, lens, timestamp, rotation,
                         physical.get(CaptureResult.SCALER_CROP_REGION), physical.get(CaptureResult.DISTORTION_CORRECTION_MODE),
                         physical.get(CaptureResult.LENS_FOCAL_LENGTH), System.currentTimeMillis())
                 }
             }
+        } catch (e: Exception) {
+            val frameState = withContext(NonCancellable + cameraDispatcher) {
+                lenses.zip(frameMatchers).joinToString("\n") { (lens, frames) -> "${lens.label}: ${frames.diagnostic()}" }
+            }
+            withContext(NonCancellable + Dispatchers.IO) {
+                runCatching { File(directory, "capture-error.txt").writeText("Stage: $phase\n$frameState\n${e.stackTraceToString()}") }
+            }
+            throw e
         } finally {
             withContext(NonCancellable) { disconnect(); releaseReaders(readers) }
         }
@@ -201,7 +235,15 @@ class CameraEngine(context: Context) : AutoCloseable {
         // Run after any in-flight YUV conversion before freeing its native image buffers.
         readers.forEach { it.setOnImageAvailableListener(null, null); it.close() }
     }
-    private fun output(surface: Surface, physicalId: String?) = OutputConfiguration(surface).apply { if (physicalId != null) setPhysicalCameraId(physicalId) }
+    private fun output(surface: Surface, physicalId: String?, sensorTimestamp: Boolean = false) = OutputConfiguration(surface).apply {
+        if (physicalId != null) setPhysicalCameraId(physicalId)
+        if (sensorTimestamp && Build.VERSION.SDK_INT >= 33) setTimestampBase(OutputConfiguration.TIMESTAMP_BASE_SENSOR)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun physicalResult(result: TotalCaptureResult, lens: LensChoice): CaptureResult = lens.physicalId?.let { id ->
+        if (Build.VERSION.SDK_INT >= 31) result.physicalCameraTotalResults[id] else result.physicalCameraResults[id]
+    } ?: result
 
     private class SessionSignals {
         lateinit var session: CameraCaptureSession
@@ -221,13 +263,13 @@ class CameraEngine(context: Context) : AutoCloseable {
     private suspend fun configure(camera: CameraDevice, outputs: List<OutputConfiguration>): SessionSignals {
         val state = SessionSignals()
         camera.createCaptureSession(configuration(outputs, state))
-        try { session = withTimeout(7000) { state.configured.await() } }
+        try { session = cameraDeadline("Configuring Camera2 streams", 7000) { state.configured.await() } }
         catch (e: Exception) { state.configured.cancel(); throw e }
         return state
     }
 
     @SuppressLint("MissingPermission")
-    private suspend fun open(id: String): CameraDevice = withTimeout(7000) {
+    private suspend fun open(id: String): CameraDevice = cameraDeadline("Opening camera $id", 7000) {
         suspendCancellableCoroutine { continuation ->
             val closed = CompletableDeferred<Unit>()
             deviceClosed = closed
@@ -241,6 +283,13 @@ class CameraEngine(context: Context) : AutoCloseable {
             }, handler) } catch (e: Exception) { closed.complete(Unit); if (continuation.isActive) continuation.resumeWithException(e) }
             continuation.invokeOnCancellation { device?.close() }
         }
+    }
+
+    private suspend fun <T> cameraDeadline(label: String, milliseconds: Long, block: suspend () -> T): T = try {
+        withTimeout(milliseconds) { block() }
+    } catch (e: TimeoutCancellationException) {
+        currentCoroutineContext().ensureActive()
+        throw IllegalStateException("$label timed out after ${milliseconds / 1000} seconds. Retry with the camera still; sequential capture may be required.", e)
     }
 
     private suspend fun disconnect() {

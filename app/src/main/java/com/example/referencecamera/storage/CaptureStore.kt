@@ -5,6 +5,8 @@ import android.net.Uri
 import com.example.referencecamera.camera.CameraReport
 import com.example.referencecamera.camera.CapturedFrame
 import com.example.referencecamera.camera.PairSupport
+import com.example.referencecamera.processing.ProcessingResult
+import com.example.referencecamera.fusion.FusionMetrics
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -12,7 +14,28 @@ import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
+data class SavedCapture(val id: String, val createdAt: Long)
+
 class CaptureStore(private val context: Context) {
+    private val capturesRoot get() = File(context.filesDir, "captures")
+
+    fun savedResults(): List<SavedCapture> = capturesRoot.listFiles().orEmpty()
+        .filter { it.isDirectory && File(it, "result.png").isFile && File(it, "comparison-original.png").isFile && File(it, "processing.json").isFile }
+        .map { SavedCapture(it.name, it.name.substringBefore('-').toLongOrNull() ?: it.lastModified()) }
+        .sortedByDescending { it.createdAt }
+
+    fun openResult(id: String): Pair<File, ProcessingResult> {
+        val directory = File(capturesRoot, id).canonicalFile
+        require(directory.parentFile == capturesRoot.canonicalFile) { "Invalid saved capture" }
+        val before = File(directory, "comparison-original.png"); val output = File(directory, "result.png")
+        require(before.isFile && output.isFile) { "Saved result is incomplete or unavailable" }
+        val metadata = runCatching { JSONObject(File(directory, "processing.json").readText()) }.getOrNull()
+        val notes = metadata?.optString("notes")?.takeIf { it.isNotBlank() } ?: "Saved result loaded. Processing notes are unavailable."
+        val metrics = metadata?.optJSONObject("fusionMetrics")?.let { FusionMetrics(it.getDouble("referenceAreaPercent"), it.getDouble("changedPixelPercent"), it.getDouble("meanOverlapDelta"), it.getInt("outsideMaskChangedPixels")) }
+        return directory to ProcessingResult(before, output, File(directory, "baseline.png"), notes,
+            metadata?.optBoolean("alignmentAccepted", false) ?: false, metadata?.optBoolean("aiApplied", false) ?: false, metrics)
+    }
+
     fun create(): File = File(context.filesDir, "captures/${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(6)}")
         .apply { check(mkdirs()) { "Cannot create local capture directory. Free some device storage." } }
 

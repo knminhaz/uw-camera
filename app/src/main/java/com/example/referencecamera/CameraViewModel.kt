@@ -10,6 +10,7 @@ import com.example.referencecamera.model.OnnxReferenceEnhancer
 import com.example.referencecamera.processing.ProcessingPipeline
 import com.example.referencecamera.processing.ProcessingResult
 import com.example.referencecamera.storage.CaptureStore
+import com.example.referencecamera.storage.SavedCapture
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,7 +18,7 @@ import kotlinx.coroutines.flow.update
 import java.io.File
 import org.json.JSONObject
 
-enum class Stage { ULTRAWIDE, MAIN, RESULT }
+enum class Stage { ULTRAWIDE, RESULT }
 data class CameraUiState(
     val report: CameraReport? = null, val support: PairSupport? = null,
     val busy: Boolean = false, val capturing: Boolean = false,
@@ -25,10 +26,10 @@ data class CameraUiState(
     val previewStatus: String = "", val previewLensSpecific: Boolean = false, val stage: Stage = Stage.ULTRAWIDE,
     val forceSequential: Boolean = false, val result: ProcessingResult? = null,
     val sessionDirectory: File? = null, val modelInstalled: Boolean = false,
-    val hasBothInputs: Boolean = false
+    val hasBothInputs: Boolean = false, val savedResults: List<SavedCapture> = emptyList()
 ) {
     val usePair get() = support?.supported == true && !forceSequential
-    val previewLens get() = if (stage == Stage.MAIN) report?.main else report?.wide
+    val previewLens get() = report?.wide
 }
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
@@ -47,6 +48,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var wide: CapturedFrame? = null
     private var main: CapturedFrame? = null
     private var simultaneous = false
+
+    init { refreshSavedResults() }
+
+    private fun refreshSavedResults() = viewModelScope.launch {
+        val saved = withContext(Dispatchers.IO) { store.savedResults() }
+        mutable.update { it.copy(savedResults = saved) }
+    }
+
+    fun openSavedResult(id: String) {
+        if (mutable.value.busy) return
+        operation = viewModelScope.launch {
+            mutable.update { it.copy(busy = true, error = null, progress = "Opening saved result…") }
+            cancelPreview()
+            try {
+                engine.stop()
+                val (directory, result) = withContext(Dispatchers.IO) { store.openResult(id) }
+                wide = null; main = null
+                mutable.update { it.copy(stage = Stage.RESULT, sessionDirectory = directory, result = result, hasBothInputs = false, progress = "Saved result opened. Export PNG to choose a folder visible in Files.") }
+            } catch (e: Exception) { if (e is CancellationException) throw e; fail(e, "Could not open saved result") }
+            finally { mutable.update { it.copy(busy = false) }; startPreview() }
+        }
+    }
 
     fun initialize() {
         if (mutable.value.busy || mutable.value.report != null) { startPreview(); return }
@@ -91,30 +114,44 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (mutable.value.busy || mutable.value.report == null) return
         operation = viewModelScope.launch {
             val report = mutable.value.report!!
-            val pair = mutable.value.usePair && mutable.value.stage == Stage.ULTRAWIDE
+            val pair = mutable.value.usePair
             mutable.update { it.copy(busy = true, capturing = true, error = null, progress = "Settling lens exposure and focus…") }
-            previewJob?.cancelAndJoin()
-            previewRoute = null; previewToken = null
             try {
+                previewJob?.cancelAndJoin()
+                previewRoute = null; previewToken = null
                 val directory = mutable.value.sessionDirectory ?: withContext(Dispatchers.IO) { store.create() }
                 mutable.update { it.copy(sessionDirectory = directory) }
-                val lenses = if (pair) listOf(report.wide, report.main) else listOf(if (mutable.value.stage == Stage.MAIN) report.main else report.wide)
-                val frames = engine.capture(lenses, directory, displayDegrees)
-                if (pair) { wide = frames[0]; main = frames[1]; simultaneous = true }
-                else if (mutable.value.stage == Stage.MAIN) { main = frames.single(); simultaneous = false }
-                else { wide = frames.single(); main = null; simultaneous = false }
+                wide = null; main = null
+                val frames = if (pair) {
+                    try {
+                        engine.capture(listOf(report.wide, report.main), directory, displayDegrees) { message -> mutable.update { it.copy(progress = message) } }
+                            .also { simultaneous = true }
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        mutable.update { it.copy(support = PairSupport(false, "Pair capture failed: ${e.message}. Automatic sequential capture is active."), forceSequential = true,
+                            progress = "Pair unavailable. Keep still: taking ultrawide, then main automatically…") }
+                        captureSequential(report, directory, displayDegrees)
+                    }
+                } else captureSequential(report, directory, displayDegrees)
+                wide = frames[0]; main = frames[1]
                 withContext(Dispatchers.IO) { store.metadata(directory, report, mutable.value.support, listOfNotNull(wide, main), simultaneous) }
                 mutable.update { it.copy(capturing = false, hasBothInputs = wide != null && main != null) }
-                if (main == null) mutable.update { it.copy(stage = Stage.MAIN, progress = "Ultrawide saved. Keep the phone in the same position; capture the main reference.") }
-                else processInputs(directory)
+                processInputs(directory)
             } catch (e: CancellationException) {
                 mutable.update { it.copy(progress = "Capture interrupted. Inputs already saved remain on the device.") }; throw e
             } catch (e: Exception) {
-                if (pair && mutable.value.capturing) mutable.update { it.copy(support = PairSupport(false, "Pair capture failed at runtime: ${e.message}. Guided sequential capture is now active."), forceSequential = true) }
                 fail(e, if (mutable.value.hasBothInputs) "Processing failed; original inputs are saved" else "Capture failed; retry with the phone still")
             } catch (_: OutOfMemoryError) { fail(null, "Not enough memory for capture. Close other camera apps and retry.") }
             finally { mutable.update { it.copy(busy = false, capturing = false) }; startPreview() }
         }
+    }
+
+    private suspend fun captureSequential(report: CameraReport, directory: File, displayDegrees: Int): List<CapturedFrame> {
+        simultaneous = false
+        val first = engine.capture(listOf(report.wide), directory, displayDegrees) { message -> mutable.update { it.copy(progress = "1/2 Ultrawide · $message") } }.single()
+        withContext(Dispatchers.IO) { store.metadata(directory, report, mutable.value.support, listOf(first), false) }
+        val second = engine.capture(listOf(report.main), directory, displayDegrees) { message -> mutable.update { it.copy(progress = "2/2 Main · $message") } }.single()
+        return listOf(first, second)
     }
 
     fun retryProcessing() {
@@ -134,6 +171,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         mutable.update { it.copy(capturing = false, stage = Stage.RESULT, progress = "Processing captured inputs…") }
         val result = pipeline.process(wide!!, main!!, directory) { message -> mutable.update { it.copy(progress = message) } }
         mutable.update { it.copy(result = result, progress = "Result saved locally. Compare before sharing.") }
+        refreshSavedResults()
     }
 
     fun newCapture() {

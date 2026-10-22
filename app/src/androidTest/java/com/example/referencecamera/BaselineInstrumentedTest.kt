@@ -14,6 +14,7 @@ import org.opencv.imgcodecs.Imgcodecs
 import java.io.File
 import com.example.referencecamera.alignment.FeatureAligner
 import com.example.referencecamera.fusion.MultiscaleFusion
+import com.example.referencecamera.fusion.FusionDiagnostics
 import com.example.referencecamera.processing.MatResources
 import org.junit.Assert.*
 import org.junit.Before
@@ -48,6 +49,9 @@ class BaselineInstrumentedTest {
         assertEquals(0.0, Core.mean(delta, outside).`val`.sum(), 0.0)
         assertTrue(Core.norm(result, wide, Core.NORM_L1) > 0)
         assertEquals(wide.size(), result.size())
+        val metrics = FusionDiagnostics.measure(wide, result, confidence)
+        assertEquals(0, metrics.outsideMaskChangedPixels)
+        assertTrue(metrics.changedPixelPercent > 0)
     }
 
     @Test fun knownCentralCropAlignsWithoutExpandingCanvas() = MatResources().use { r ->
@@ -94,6 +98,30 @@ class BaselineInstrumentedTest {
                 assertEquals(720, output.cols()); assertEquals(960, output.rows())
                 assertEquals(0.0, Core.norm(output, baseline, Core.NORM_INF), 0.0)
                 assertArrayEquals(inputBytes, wideFile.readBytes())
+            }
+        } finally { directory.deleteRecursively() }
+    }
+
+    @Test fun rejectedReferenceUsesIdenticalComparisonResize() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.cacheDir, "resize-test-${System.nanoTime()}").apply { mkdirs() }
+        val modelContext = object : ContextWrapper(context) { override fun getFilesDir() = directory }
+        try {
+            MatResources().use { r ->
+                val image = r.own(texture(1600, 1200))
+                val reference = r.own(Mat(1200, 1600, CvType.CV_8UC3, Scalar(80.0, 80.0, 80.0)))
+                val wideFile = File(directory, "ultrawide.jpg"); val mainFile = File(directory, "main.jpg")
+                assertTrue(Imgcodecs.imwrite(wideFile.absolutePath, image)); assertTrue(Imgcodecs.imwrite(mainFile.absolutePath, reference))
+                val calibration = LensCalibration(null, null, null, null, intArrayOf(0))
+                val lens = LensChoice("0", "2", "Ultrawide", 2f, .3f, AndroidSize(1600, 1200), AndroidSize(1600, 1200), 0, calibration, intArrayOf(0), "synthetic fixture")
+                val wide = CapturedFrame(wideFile, lens, 1000000, 0, null, null, 2f, 0)
+                val main = CapturedFrame(mainFile, lens.copy(physicalId = "1"), 2000000, 0, null, null, 6f, 0)
+                val result = ProcessingPipeline(OnnxReferenceEnhancer(modelContext)).process(wide, main, directory) {}
+                assertFalse(result.referenceUsed)
+                val before = r.own(Imgcodecs.imread(result.before.absolutePath)); val output = r.own(Imgcodecs.imread(result.output.absolutePath))
+                assertEquals(1280, output.cols())
+                assertEquals(0.0, Core.norm(before, output, Core.NORM_INF), 0.0)
+                assertEquals(0.0, result.metrics!!.changedPixelPercent, 0.0)
             }
         } finally { directory.deleteRecursively() }
     }

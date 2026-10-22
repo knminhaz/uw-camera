@@ -3,6 +3,8 @@ package com.example.referencecamera.processing
 import com.example.referencecamera.alignment.FeatureAligner
 import com.example.referencecamera.camera.CapturedFrame
 import com.example.referencecamera.fusion.MultiscaleFusion
+import com.example.referencecamera.fusion.FusionDiagnostics
+import com.example.referencecamera.fusion.FusionMetrics
 import com.example.referencecamera.model.ReferenceEnhancer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -12,7 +14,7 @@ import org.opencv.core.*
 import org.opencv.imgcodecs.Imgcodecs
 import java.io.File
 
-data class ProcessingResult(val before: File, val output: File, val baseline: File, val message: String)
+data class ProcessingResult(val before: File, val output: File, val baseline: File, val message: String, val referenceUsed: Boolean = false, val aiApplied: Boolean = false, val metrics: FusionMetrics? = null)
 
 class ProcessingPipeline(private val enhancer: ReferenceEnhancer) {
     suspend fun process(wide: CapturedFrame, main: CapturedFrame, directory: File, progress: (String) -> Unit): ProcessingResult = withContext(Dispatchers.Default) {
@@ -37,7 +39,7 @@ class ProcessingPipeline(private val enhancer: ReferenceEnhancer) {
                     val oriented = r.own(Mat())
                     val rotation = when (wideFrame.rotationDegrees) { 90 -> Core.ROTATE_90_CLOCKWISE; 180 -> Core.ROTATE_180; 270 -> Core.ROTATE_90_COUNTERCLOCKWISE; else -> -1 }
                     if (rotation == -1) raw.copyTo(oriented) else Core.rotate(raw, oriented, rotation)
-                    val resized = r.own(Mat()); org.opencv.imgproc.Imgproc.resize(oriented, resized, wide.image.size())
+                    val resized = r.own(Mat()); org.opencv.imgproc.Imgproc.resize(oriented, resized, wide.image.size(), 0.0, 0.0, org.opencv.imgproc.Imgproc.INTER_AREA)
                     check(Imgcodecs.imwrite(before.absolutePath, resized)) { "Cannot save comparison input" }
                 }
                 progress("Aligning main-camera reference…")
@@ -45,6 +47,7 @@ class ProcessingPipeline(private val enhancer: ReferenceEnhancer) {
                     progress("Building confidence mask and multiscale fusion…")
                     val baselineImage = if (alignment.accepted) MultiscaleFusion().fuse(wide.image, alignment.warped, alignment.confidence) else wide.image.clone()
                     try {
+                        val metrics = FusionDiagnostics.measure(wide.image, baselineImage, alignment.confidence)
                         val baseline = File(directory, "baseline.png"); check(Imgcodecs.imwrite(baseline.absolutePath, baselineImage))
                         MatResources().use { r ->
                             val mask = r.own(Mat()); alignment.confidence.convertTo(mask, CvType.CV_8U, 255.0)
@@ -61,9 +64,11 @@ class ProcessingPipeline(private val enhancer: ReferenceEnhancer) {
                             "Output ${wide.image.cols()}×${wide.image.rows()}; ultrawide canvas retained. Inputs are YUV frames encoded locally as JPEG, without Google Camera computational processing.")
                         File(directory, "processing.json").writeText(JSONObject().apply {
                             put("alignmentAccepted", alignment.accepted); put("notes", notes.joinToString("\n")); put("canvasMaxEdge", maxEdge)
+                            put("aiApplied", enhancement.image != null)
+                            put("fusionMetrics", metrics.json())
                             put("timestampDeltaMs", kotlin.math.abs(wideFrame.timestampNs - mainFrame.timestampNs) / 1_000_000.0)
                         }.toString(2))
-                        return ProcessingResult(before, output, baseline, notes.joinToString("\n\n"))
+                        return ProcessingResult(before, output, baseline, notes.joinToString("\n\n"), alignment.accepted, enhancement.image != null, metrics)
                     } finally { baselineImage.release() }
                 }
             }

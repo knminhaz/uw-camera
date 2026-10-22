@@ -2,7 +2,7 @@
 
 Native Kotlin Android research app for a Pixel 7. It captures a real ultrawide frame and a real main-camera reference, aligns their overlap, and transfers detail into the ultrawide canvas. All processing and storage stay on the device. No network permission, services, accounts, analytics, or model downloads are included.
 
-**Device camera support and image-quality improvement have not been established on a physical Pixel 7.** The app discovers and probes support on the phone. A successful build or synthetic processing test cannot establish physical-camera availability, exposure synchronization, or real-world quality.
+**Image-quality improvement has not been established.** The connected Pixel 7 exposed ultrawide physical ID 3 and main physical ID 2 behind logical ID 0. Its two 2048×1536 YUV streams configured, but the actual pair request lost the main image buffer. Automatic sequential capture produced completed results. One recorded session had about 1.79 seconds between inputs and about 10% reliable reference coverage; these observations are not quality measurements.
 
 ## Open and run
 
@@ -27,9 +27,15 @@ The app does not need photo-library or storage permission. Its inputs and result
 
 1. The app lists logical camera IDs, their physical IDs, focal lengths, sensor sizes, YUV/JPEG stream sizes, and advertised concurrent logical-camera sets. It selects two distinct rear lenses using focal length relative to sensor width, preferring a shared logical camera. IDs and zoom ratios are never hardcoded.
 2. It opens the logical camera, queries the two selected physical YUV stream configuration where the API implements that query, and attempts to configure that exact session. A successful configure is recorded as evidence for that particular combination of format and sizes. It does not establish support for every stream combination.
-3. If the pair session configured, **Capture both lenses** warms up both cameras and sends a single request to two physical outputs. Exposure timestamps and synchronization metadata are saved. A pair capture failure visibly disables this mode and enables the two-shot fallback. Guided two-shot mode can also be selected manually.
-4. Otherwise, **Capture ultrawide** saves the first image. The preview switches to the real main lens. Keep the phone in the same position, keep the scene still, then press **Capture main reference**. The sequential timing limitation stays visible on screen.
-5. OpenCV processes the captured images on a worker dispatcher. The UI shows progress, an original/result comparison slider, processing notes, and export actions. Unreliable alignment returns the ultrawide baseline with an explanation.
+3. Press the round shutter **once**. If the pair session configured, the app warms up both cameras and sends a single request to the two physical outputs. Exposure timestamps and synchronization metadata are saved.
+4. If a pair is unavailable or that capture fails, the app automatically captures ultrawide followed by main. No second shutter tap is required. **SEQUENTIAL** and step-by-step progress make the timing limitation visible. Keep the phone and scene still until both images finish saving. Settings can also force the sequential method.
+5. OpenCV immediately processes both saved images on a worker dispatcher. The app opens the original/result comparison, processing status, and export actions. Reopen completed images with the bottom-left **Results** gallery button, including after restarting the app. The result screen explicitly distinguishes reference fusion, optional ONNX output, and a retained ultrawide when alignment is unreliable.
+
+You do **not** need to import an ONNX model to capture, process, or view the baseline. The import button is under **Settings** as an optional advanced feature for a compatible reference-SR model. **Save to Files** on the result screen opens Android's document picker so you can save a PNG in Downloads or another folder; the app-private original does not automatically appear in the Photos gallery.
+
+Comparison controls offer Fit, 2× and 4× inspection, with dragging when zoomed. The Mask button overlays reference confidence in cyan. Newly processed sessions report reference coverage and pixels changed by at least 2/255 in any channel relative to the prepared ultrawide. These diagnostics measure processing activity, not quality. The baseline and comparison use the same INTER_AREA resize filter. The display loads the saved processing resolution; zoom does not recover extra pixels. Older sessions can be inspected but lack the new metrics and retain their original comparison files.
+
+Preview rotation compensates only display rotation because TextureView already handles the sensor orientation. Display changes, including a 180-degree rotation, refresh the preview transform. Input YUV image orientation is handled separately during saving and processing.
 
 The dual-session probe covers two physical cameras behind one logical camera. Separate logical camera concurrency is inventoried but this POC does not implement dual-device capture. Those devices use the explicit sequential path even if they advertise another concurrent combination. Session rejection is a configuration-specific result, not a claim that the hardware can never capture two cameras together.
 
@@ -60,7 +66,7 @@ Distortion correction prefers the camera HAL's advertised FAST mode. The **actua
 
 No model weights are provided, fetched, or assumed. Until a compatible file is explicitly supplied, the app says **AI unavailable** and shows the deterministic OpenCV result. Generic sharpening is never presented as AI super-resolution.
 
-Use **Camera & model details → Import trusted ONNX model** to copy a file chosen on the device to:
+Use **Settings → Advanced: import ONNX model (optional)** to copy a file chosen on the device to:
 
 ```text
 <app files directory>/models/reference_sr.onnx
@@ -87,13 +93,16 @@ Each capture session is stored under `files/captures/<time>-<id>/`:
 
 - `ultrawide.jpg`, `main.jpg`: original camera YUV inputs encoded locally as JPEG quality 97, with EXIF orientation. These are not Google Camera HDR+ images or sensor RAW files.
 - `capture.json`: logical/physical routes, selected stream sizes, calibration, actual crop/correction/focal-length metadata, capture mode, sensor timestamps, and wall-clock times.
+- `capture-error.txt`, if capture fails: the stage and exception details. Operational timeouts are shown as errors; lifecycle cancellation is reported as interruption. A timestamp-rejected image is retained for diagnosis before the rejection is reported.
 - `comparison-original.png`: oriented, resized ultrawide before optional geometric correction.
 - `aligned-reference.jpg`, `confidence.png`: alignment and mask diagnostics.
 - `baseline.png`: deterministic OpenCV result.
 - `result.png`: baseline or optional model result.
 - `processing.json`: alignment acceptance, notes, processing size, and input timestamp difference.
 
-`files/camera-report.json` stores the latest discovery/probe report. Partial inputs remain on disk if capture or processing fails. Export the ZIP to preserve inputs, output, and diagnostics. App-private sessions survive closing the app but are removed by clearing app data or uninstalling. A session browser or automatic process-death restoration is not included; export before leaving an important session. For debug recovery, `adb shell run-as com.example.referencecamera ls files/captures` can list saved sessions.
+`files/camera-report.json` stores the latest discovery/probe report. Partial inputs remain on disk if capture or processing fails. Export the ZIP to preserve inputs, output, and diagnostics. App-private sessions survive closing the app but are removed by clearing app data or uninstalling. **Results** lists completed sessions and opens their comparison and exports after app restart. In-progress capture/processing state is not automatically restored after process death. For debug recovery of partial inputs, `adb shell run-as com.example.referencecamera ls files/captures` can list saved sessions.
+
+One persistent ImageReader listener drains warmup frames and is armed on its own callback thread before the still request. Images are correlated with physical capture-result timestamps in either callback order; API 33+ capture outputs explicitly use the sensor timestamp base. Buffer loss, aborted sequences, and camera-operation timeouts produce explicit errors. This avoids replacing a warmup listener while the still image is being delivered.
 
 ## Limitations and evaluation
 
@@ -106,12 +115,14 @@ Each capture session is stored under `files/captures/<time>-<id>/`:
 
 ## Build and checks
 
+Run connected instrumentation checks on a dedicated test device or emulator. The Gradle test runner can uninstall its target app after the run, which removes app-private captures. Export important sessions before running connected tests on a phone used for photography.
+
 ```powershell
 .\gradlew.bat :app:assembleDebug :app:lintDebug
 .\gradlew.bat :app:testDebugUnitTest
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-JVM checks cover padded/interleaved YUV planes, buffer positions, chroma order, and sensor crop offsets. Instrumentation checks use synthetic images to check canvas preservation, exact preservation outside zero-confidence regions, detail-band transfer inside a mask, known-crop alignment, rejection of featureless references, and a complete oriented capture-file-to-baseline pipeline with no model. They require an emulator or Android device and OpenCV's Android native library. They do not validate Pixel physical-camera support or prove photographic quality.
+JVM checks cover padded/interleaved YUV planes, buffer positions, chroma order, sensor crop offsets, and preview geometry for portrait/landscape/270-degree sensors and a square viewport. Instrumentation checks use synthetic images to check canvas preservation, exact preservation outside zero-confidence regions, detail-band transfer inside a mask, known-crop alignment, rejection of featureless references, and a complete oriented capture-file-to-baseline pipeline with no model. Saved-result tests check reopening, newest-first ordering, incomplete-session exclusion, and storage path boundaries. They require an emulator or Android device and OpenCV's Android native library. They do not establish real capture timing or prove photographic quality.
 
 Primary API references: [Camera2 multi-camera](https://developer.android.com/media/camera/camera2/multi-camera), [physical OutputConfiguration routing](https://developer.android.com/reference/android/hardware/camera2/params/OutputConfiguration#setPhysicalCameraId(java.lang.String)), [ONNX Runtime Java](https://onnxruntime.ai/docs/get-started/with-java.html), and [OpenCV](https://docs.opencv.org/4.x/).
