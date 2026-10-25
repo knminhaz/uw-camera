@@ -12,12 +12,12 @@ The full view has a vertical divider: **original ultrawide on the left, processe
 
 Crops were deliberately selected to show visible changes within trusted regions. These are illustrative examples, not random benchmark samples. Sharper-looking edges do not establish that recovered detail is accurate, especially for small text and photographed screens. The combined output includes AI restoration; these comparisons do not isolate the benefit of reference fusion alone.
 
-| Scene | Captured (IST, UTC+05:30) | Trusted reference area | Changed pixels: fusion | Changed pixels: final | Processing |
+| Scene | Capture date (IST) | Trusted reference area | Changed pixels: fusion | Changed pixels: final | Processing |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Fabric texture | 25 Oct 2026, 02:53:12 PM IST | 30.37% | 21.80% | 22.14% | 241.0 s |
-| Printed packaging | 25 Oct 2026, 11:56:54 PM IST | 4.58% | 2.82% | 2.89% | 23.1 s |
-| Screen detail | 26 Oct 2026, 12:02:17 AM IST | 15.38% | 12.27% | 12.73% | 51.8 s |
-| Dog figure / very low light | 26 Oct 2026, 12:12:07 AM IST | 2.51% | 1.47% | 1.53% | 13.5 s |
+| Fabric texture | 25 Oct 2026 | 30.37% | 21.80% | 22.14% | 241.0 s |
+| Printed packaging | 25 Oct 2026 | 4.58% | 2.82% | 2.89% | 23.1 s |
+| Screen detail | 26 Oct 2026 | 15.38% | 12.27% | 12.73% | 51.8 s |
+| Dog figure / very low light | 26 Oct 2026 | 2.51% | 1.47% | 1.53% | 13.5 s |
 
 **What the percentages mean:** trusted reference area comes from the app's saved fusion diagnostics. Changed pixels differ from `prepared-ultrawide.png` by at least 2/255 in any RGB channel across the full image. Fusion values come from the app diagnostics; final values are calculated from the archived final pixels. These are processing-activity percentages, **not percentage improvements in image quality**. No aligned ground truth was supplied, so no PSNR, SSIM, or quality-gain percentage is claimed.
 
