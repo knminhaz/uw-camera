@@ -8,6 +8,9 @@ import com.example.referencecamera.camera.CapturedFrame
 import com.example.referencecamera.camera.LensCalibration
 import com.example.referencecamera.camera.LensChoice
 import com.example.referencecamera.model.OnnxReferenceEnhancer
+import com.example.referencecamera.model.ReferenceEnhancer
+import com.example.referencecamera.model.Enhancement
+import org.json.JSONObject
 import com.example.referencecamera.processing.ProcessingPipeline
 import kotlinx.coroutines.runBlocking
 import org.opencv.imgcodecs.Imgcodecs
@@ -91,7 +94,7 @@ class BaselineInstrumentedTest {
                 val lens = LensChoice("0", "2", "Ultrawide", 2.0f, .3f, AndroidSize(960,720), AndroidSize(960,720), 90, calibration, intArrayOf(0), "synthetic fixture")
                 val wide = CapturedFrame(wideFile, lens, 1000000, 90, null, null, 2f, 0)
                 val main = CapturedFrame(mainFile, lens.copy(physicalId = "1", label = "Main 1×"), 2000000, 90, null, null, 6f, 1)
-                val result = ProcessingPipeline(OnnxReferenceEnhancer(modelContext)).process(wide, main, directory) {}
+                val result = ProcessingPipeline(OnnxReferenceEnhancer(modelContext, includeBundled = false)).process(wide, main, directory) {}
                 assertTrue(result.message, result.message.contains("AI unavailable"))
                 assertTrue(result.before.exists()); assertTrue(File(directory, "confidence.png").exists())
                 val output = r.own(Imgcodecs.imread(result.output.absolutePath)); val baseline = r.own(Imgcodecs.imread(result.baseline.absolutePath))
@@ -116,12 +119,64 @@ class BaselineInstrumentedTest {
                 val lens = LensChoice("0", "2", "Ultrawide", 2f, .3f, AndroidSize(1600, 1200), AndroidSize(1600, 1200), 0, calibration, intArrayOf(0), "synthetic fixture")
                 val wide = CapturedFrame(wideFile, lens, 1000000, 0, null, null, 2f, 0)
                 val main = CapturedFrame(mainFile, lens.copy(physicalId = "1"), 2000000, 0, null, null, 6f, 0)
-                val result = ProcessingPipeline(OnnxReferenceEnhancer(modelContext)).process(wide, main, directory) {}
+                val result = ProcessingPipeline(OnnxReferenceEnhancer(modelContext, includeBundled = false)).process(wide, main, directory) {}
                 assertFalse(result.referenceUsed)
                 val before = r.own(Imgcodecs.imread(result.before.absolutePath)); val output = r.own(Imgcodecs.imread(result.output.absolutePath))
                 assertEquals(1280, output.cols())
                 assertEquals(0.0, Core.norm(before, output, Core.NORM_INF), 0.0)
                 assertEquals(0.0, result.metrics!!.changedPixelPercent, 0.0)
+            }
+        } finally { directory.deleteRecursively() }
+    }
+
+    @Test fun modelStageIsSavedSeparatelyAndClearedWhenARetryUsesNoModel() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.cacheDir, "model-stage-test-${System.nanoTime()}").apply { mkdirs() }
+        val modelContext = object : ContextWrapper(context) { override fun getFilesDir() = directory }
+        try {
+            MatResources().use { r ->
+                val image = r.own(texture(960, 720))
+                val crop = r.own(image.submat(Rect(240, 180, 480, 360)))
+                val ref = r.own(Mat()); Imgproc.resize(crop, ref, Size(640.0, 480.0))
+                val wideFile = File(directory, "ultrawide.jpg"); val mainFile = File(directory, "main.jpg")
+                assertTrue(Imgcodecs.imwrite(wideFile.absolutePath, image))
+                assertTrue(Imgcodecs.imwrite(mainFile.absolutePath, ref))
+                val wideBytes = wideFile.readBytes(); val mainBytes = mainFile.readBytes()
+                val calibration = LensCalibration(null, null, null, null, intArrayOf(0))
+                val lens = LensChoice("0", "2", "Ultrawide", 2f, .3f, AndroidSize(960, 720), AndroidSize(960, 720), 0, calibration, intArrayOf(0), "synthetic fixture")
+                val wide = CapturedFrame(wideFile, lens, 1000000, 0, null, null, 2f, 0)
+                val main = CapturedFrame(mainFile, lens.copy(physicalId = "1"), 2000000, 0, null, null, 6f, 0)
+                // This is a storage test double, not a trained model or a quality claim.
+                val enhancer = object : ReferenceEnhancer {
+                    override fun enhance(target: Mat, alignedReference: Mat, confidence: Mat, progress: (String) -> Unit): Enhancement {
+                        val candidate = target.clone()
+                        val mask = Mat()
+                        try {
+                            confidence.convertTo(mask, CvType.CV_8U, 255.0)
+                            candidate.setTo(Scalar(12.0, 34.0, 56.0), mask)
+                        } finally { mask.release() }
+                        return Enhancement(candidate, "Synthetic test enhancement", proposal = candidate.clone())
+                    }
+                }
+                val result = ProcessingPipeline(enhancer).process(wide, main, directory) {}
+                assertTrue(result.referenceUsed); assertTrue(result.aiApplied)
+                val modelFile = result.aiOutput ?: error("Expected standalone model stage")
+                assertEquals("onnx-result.png", modelFile.name)
+                val proposalFile = result.aiProposal ?: error("Expected standalone model proposal")
+                assertEquals("onnx-proposal.png", proposalFile.name)
+                assertArrayEquals(modelFile.readBytes(), result.output.readBytes())
+                assertArrayEquals(proposalFile.readBytes(), modelFile.readBytes())
+                val baseline = r.own(Imgcodecs.imread(result.baseline.absolutePath))
+                val model = r.own(Imgcodecs.imread(modelFile.absolutePath))
+                assertTrue(Core.norm(baseline, model, Core.NORM_L1) > 0)
+                val retried = ProcessingPipeline(OnnxReferenceEnhancer(modelContext, includeBundled = false)).process(wide, main, directory) {}
+                assertFalse(retried.aiApplied); assertNull(retried.aiOutput)
+                assertFalse(modelFile.exists()); assertFalse(proposalFile.exists())
+                assertNull(retried.aiProposal)
+                assertArrayEquals(retried.baseline.readBytes(), retried.output.readBytes())
+                val metadata = JSONObject(File(directory, "processing.json").readText())
+                assertFalse(metadata.getBoolean("aiApplied")); assertTrue(metadata.isNull("onnxOutput"))
+                assertArrayEquals(wideBytes, wideFile.readBytes()); assertArrayEquals(mainBytes, mainFile.readBytes())
             }
         } finally { directory.deleteRecursively() }
     }

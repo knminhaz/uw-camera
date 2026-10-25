@@ -1,3 +1,36 @@
+# Pixel 7 deployment follow-up — 25 October 2026
+
+- Connected to the user's authorized Pixel 7 through an ADB server started in the normal Windows session. Direct sandbox USB access was denied, despite the USB driver working.
+- The installed v0.1.6 certificate differed from the new local debug certificate. Built with `-PcameraPreview=true` and installed `com.example.referencecamera.preview`, labeled **Reference Camera AI Preview**, version **0.1.7-preview** (versionCode 8). This preserves the differently signed original app and all ten of its existing capture directories.
+- Copied only the original app's camera-strategy preferences so remembered dual-delivery failures remain effective. No camera images were copied or deleted.
+- Ran all 19 Android instrumentation tests on the Pixel: **19 passed**, 0 failures, in 10.344 seconds. The checks included actual bundled ONNX inference on a small synthetic image, checksum verification, exact zero-confidence preservation, custom-reference-model inference, non-finite output rejection, disabling, cancellation, OpenCV pipeline/storage tests, and stage exports. No real photographs were taken for these checks. See docs/validation/pixel-onnx-instrumentation.txt.
+- Removed the temporary test harness and successfully launched the preview MainActivity. Android reported a 786 ms cold activity launch and the preview as the top resumed activity. This is launcher timing, not AI inference latency. No AndroidRuntime crash was reported for the launched process.
+- Real-capture model latency and photographic improvement remain unmeasured. See docs/validation/pixel-onnx-deployment.json for the deployment record.
+
+# Version 0.1.7 — bundled ONNX restoration — 25 October 2026
+
+- Added an actual pretrained Real-ESRGAN general x4v3 ONNX graph (4.87 MB), exported from the authors' checkpoint with unchanged weights, a pinned source checksum, and the upstream BSD 3-Clause notice. The phone has no runtime model download or INTERNET permission.
+- This is single-image neural restoration after OpenCV camera fusion. The neural network does not directly consume the main-camera image. Native 4x output is area-resized back to the existing canvas; it is not a full-resolution 4x output claim.
+- Added bounded tiled CPU inference, per-tile progress, cancellation between tiles, a persistent AI toggle, custom-model validation before replacement, and restoration of the bundled model. Zero-confidence pixels are preserved exactly by the final blend.
+- Saved stages now include prepared inputs, a lossless aligned reference, the confidence visualization, OpenCV baseline, model proposal, blended AI result, and final image. Stage selection, sharing, export, legacy sessions, and stale-stage cleanup are supported. Model ID/checksum, tile count, and stage duration are saved in processing metadata.
+- Host model checks passed: maximum absolute PyTorch/ONNX error 4.083e-6; tiled/full-frame discrepancy 0.0 on the synthetic fixture; zero-confidence tiles skipped and outside-mask pixels preserved. See docs/validation/onnx-host-checks.json. These are numerical implementation checks, not photographic quality scores.
+- Final build checks passed: :app:assembleDebug, :app:assembleDebugAndroidTest, :app:lintDebug, and :app:testDebugUnitTest. All 13 JVM tests passed. Lint reported 0 errors and 7 dependency-version warnings. APK signature and packaged model/license were verified. See docs/validation/onnx-build-checks.json.
+- The 19 Android instrumentation tests compiled but were not executed. No Android device was visible in Windows device enumeration; ADB also could not initialize its default .android directory within the sandbox. No phone installation, camera capture, device latency test, or real-photo quality assessment was performed.
+- Verification used an isolated JDK 17 and Android SDK 35 with build-tools 34.0.0 under the task's work directory. local.properties was updated to that SDK. Java and Gradle environment settings were scoped to the verification processes.
+- This is a new local debug signing key; compatibility with any already-installed APK has not been checked. Preserve app-private captures before any future installation workflow that might require uninstalling.
+
+APK SHA-256: 5bb910879a91c4619ee4b9ab1d0b3db637c46e3f49adb71cb7de9801d06a3218
+
+# Code review follow-up — 25 October 2026
+
+- Reviewed the uncommitted output-stage changes and their interactions with processing, saved-session reopening, sharing, and export.
+- Fixed stage exports: Share stage and Save stage now use the image selected in the result screen. The document-picker callback remembers the requested stage, and export accepts only known output files for the current result.
+- Preserved older AI sessions: when `aiApplied` is true and `onnx-result.png` is absent, the existing `result.png` is treated as the AI stage. Missing baselines can fall back to displaying the saved final image.
+- Prevented stale model stages: loading checks the session's `aiApplied` metadata, and a successful baseline-only retry removes a previous standalone ONNX result.
+- Added regression tests for these storage/export paths and for synthetic model-stage saving followed by a no-model retry. The synthetic enhancer is a test double, not an ONNX model or a quality demonstration.
+- Source review and `git diff --check` completed. Attempted `:app:assembleDebug :app:lintDebug :app:testDebugUnitTest --offline`, but Gradle stopped before running because `JAVA_HOME` is unset and no `java` executable is available on PATH. The configured Android SDK path also belongs to the prior machine's user folder. No build, lint, JVM tests, or Android instrumentation tests passed as part of this follow-up.
+- No trained ONNX weights were added, no camera capture was performed, and no photographic quality improvement was established. Earlier validation records below describe earlier versions and environments.
+
 # Validation record — 22 October 2026
 
 ## Version 0.1.6: callback workload and timing diagnostics
@@ -137,3 +170,14 @@ SHA-256:
 ```
 
 See [README](README.md) for Pixel installation, capture instructions, local storage, limitations, and the ONNX adapter contract.
+
+
+## UW camera 0.1.8: laptop admin and USB archival (2026-10-25)
+
+Local dashboard and USB companion implemented. Nine desktop tests pass for exact metric values, archive checksums, missing/unsafe transfers, duplicate/damaged archives, explicit ground-truth registration, and cross-site rejection. Pixel instrumentation ordinary suite reports OK (24 tests; opt-in USB case skipped); the explicit synthetic USB round-trip then passed separately, verifying nine files and removing its temporary phone session only after acknowledgement. JVM tests pass. Browser checks covered rendering, loaded stage images, slider keyboard movement, zoom, difference view, search, QA filter, matrix, notes, reference dialog and settings. No browser console errors were observed.
+
+The ARM64-only APK installed successfully after the universal debug APK exceeded Android's free-space installation budget. The bundled ONNX asset SHA-256 remains unchanged. Existing saved sessions in both packages were retained. The app launcher label and camera heading are UW camera; the preview package identifier is retained so its data and signing identity remain compatible.
+
+The archived synthetic chart is explicitly marked QA and does not establish image-quality improvement. No matched regular Pixel Camera image was available to quantify the user's top/bottom framing observation. An existing app capture records a 2048x1536 stream and ultrawide crop equal to its reported 4032x3016 active array. This supports no explicit digital crop in our capture request; it does not prove equal field of view to Pixel Camera's processing.
+
+See `docs/validation/desktop-usb-admin.json` and `desktop/README.md`. Real camera capture timing and quality remain device/scene dependent.

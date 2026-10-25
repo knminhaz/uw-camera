@@ -1,0 +1,14 @@
+{
+  "pytorchOnnxMaxAbsError": 4.082918167114258e-06,
+  "tiledFullFrameMaxAbsError": 0.0,
+  "tileCount": 6,
+  "roiTileCount": 4,
+  "zeroConfidenceTilesRun": 0,
+  "outsideMaskPixelsPreserved": true,
+  "hostOnly": true,
+  "photographicQualityMeasured": false,
+  "torch": "2.5.1+cpu",
+  "onnx": "1.17.0",
+  "onnxruntime": "1.20.1",
+  "modelSha256": "f33589a314c1a8984e87c5bee6d98ac94751f670da88d10c9ed2ad49ce5abbad"
+}

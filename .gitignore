@@ -6,3 +6,10 @@ local.properties
 **/build/
 *.iml
 .DS_Store
+/work/
+
+/desktop-data/
+
+**/__pycache__/
+
+/desktop/launch.local.json

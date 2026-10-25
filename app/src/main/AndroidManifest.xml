@@ -7,7 +7,7 @@
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@drawable/ic_app"
-        android:label="Reference Camera POC"
+        android:label="${cameraAppLabel}"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:supportsRtl="true">
         <provider

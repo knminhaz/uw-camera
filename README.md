@@ -1,8 +1,51 @@
-# Reference Camera POC
+# UW camera
 
-Native Kotlin Android research app for a Pixel 7. It captures a real ultrawide frame and a real main-camera reference, aligns their overlap, and transfers detail into the ultrawide canvas. All processing and storage stay on the device. No network permission, services, accounts, analytics, or model downloads are included.
+Native Kotlin Android research prototype intended for phones with ultrawide and main cameras across manufacturers. Pixel 7 is the current test device; compatibility on other devices still requires validation. It captures a real ultrawide frame and a real main-camera reference, aligns their overlap, and transfers detail into the ultrawide canvas. Processing stays on the device. New captures are temporary phone previews; OK archives every stage on the connected laptop through the local USB companion. No network permission, services, accounts, analytics, or runtime model downloads are included. A pretrained restoration model is bundled with the APK.
 
 **Image-quality improvement has not been established.** The connected Pixel 7 exposed ultrawide physical ID 3 and main physical ID 2 behind logical ID 0. Its two 2048×1536 YUV streams configured, but the actual pair request lost the main image buffer. Automatic sequential capture produced completed results. One recorded session had about 1.79 seconds between inputs and about 10% reliable reference coverage; these observations are not quality measurements.
+
+## Captured examples: matched detail and confidence masks
+
+These are real archived captures, compared with their saved **OpenCV fusion + Real-ESRGAN** outputs. The figures use pixel compositing, identical crops, and equal enlargement. No additional exposure, contrast, color, sharpening, or generative edits were applied when making the figures.
+
+The full view has a vertical divider: **original ultrawide on the left, processed output on the right**. Green boxes identify the same **128 x 128 pixel region**, enlarged **4x with nearest-neighbor sampling** on both sides. The confidence overlays appear at the bottom of each figure: green opacity follows the saved reference confidence, with a maximum opacity of 45%.
+
+Crops were deliberately selected to show visible changes within trusted regions. These are illustrative examples, not random benchmark samples. Sharper-looking edges do not establish that recovered detail is accurate, especially for small text and photographed screens. The combined output includes AI restoration; these comparisons do not isolate the benefit of reference fusion alone.
+
+| Scene | Captured (IST, UTC+05:30) | Trusted reference area | Changed pixels: fusion | Changed pixels: final | Processing |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Fabric texture | 25 Oct 2026, 02:53:12 PM IST | 30.37% | 21.80% | 22.14% | 241.0 s |
+| Printed packaging | 25 Oct 2026, 11:56:54 PM IST | 4.58% | 2.82% | 2.89% | 23.1 s |
+| Screen detail | 26 Oct 2026, 12:02:17 AM IST | 15.38% | 12.27% | 12.73% | 51.8 s |
+| Dog figure / very low light | 26 Oct 2026, 12:12:07 AM IST | 2.51% | 1.47% | 1.53% | 13.5 s |
+
+**What the percentages mean:** trusted reference area comes from the app's saved fusion diagnostics. Changed pixels differ from `prepared-ultrawide.png` by at least 2/255 in any RGB channel across the full image. Fusion values come from the app diagnostics; final values are calculated from the archived final pixels. These are processing-activity percentages, **not percentage improvements in image quality**. No aligned ground truth was supplied, so no PSNR, SSIM, or quality-gain percentage is claimed.
+
+### Fabric texture
+
+The leaf-pattern fabric is the clearest texture example in this set. Inspect the same strands and edges in both crops; the output's crisper appearance alone does not verify detail accuracy.
+
+![Fabric texture: full split comparison, matched 4x detail crops and green confidence overlays](docs/images/fabric-detail.png)
+
+### Printed packaging
+
+A small trusted region covers the package. Small text can acquire plausible-looking strokes from restoration; the figure should not be interpreted as verified text recovery.
+
+![Printed packaging: full split comparison, matched 4x detail crops and confidence overlays](docs/images/packaging-detail.png)
+
+### Photographed screen
+
+The screen image contains display resampling and potential moire. It is a visual processing example, not a clean resolution chart.
+
+![Photographed screen: full split comparison, matched 4x detail crops and confidence overlays](docs/images/screen-detail.png)
+
+### Dog figure: very low light
+
+**This scene was captured in very low light, as reported during capture.** No lux measurement was recorded. Only 2.51% of the canvas had trusted reference support; the enlarged region shows the circular detail on the figure. This is a difficult-condition example, not a measured low-light performance claim. Both sides retain their saved exposure and color.
+
+![Dog figure in very low light: full split comparison, matched 4x detail and green confidence overlays](docs/images/low-light-dog.png)
+
+The [figure manifest](docs/images/comparison-manifest.json) records capture dates, exact crop coordinates, measurements, source SHA-256 checksums and figure checksums. Rebuild from the original local archives with `python tools/compose_readme_comparisons.py` (requires NumPy and Pillow from `desktop/requirements.txt`). The full private photo archives are not included in the repository.
 
 ## How it works: the main idea
 
@@ -20,13 +63,13 @@ flowchart TD
     U --> F["5. Fuse details<br/>Main detail in trusted regions<br/>Ultrawide pixels elsewhere"]
     D --> F
     F --> G["6. Save and compare<br/>Original ultrawide versus processed result"]
-    F -.-> H["Optional future AI enhancement<br/>No model included"]
+    F -.-> H["Optional on-device ONNX restoration<br/>Bundled Real-ESRGAN"]
     H -.-> G
 ```
 
 The ultrawide is the base photograph. The main camera provides a closer look at part of the same scene. Alignment lines up corresponding objects; confidence checks reject unreliable regions; multiscale fusion blends detail without a rectangular patch. If a region cannot be matched reliably, its original ultrawide pixels are retained. The outer view remains ultrawide. All processing stays on-device.
 
-AI is optional and currently absent. Reference coverage and pixel-change statistics indicate processing activity, not proven image-quality gains.
+AI is optional: a bundled Real-ESRGAN model restores the OpenCV-fused image. It is a single-image model, not a learned dual-camera fusion model. Reference coverage and pixel-change statistics indicate processing activity, not proven image-quality gains.
 
 ## Open and run
 
@@ -45,7 +88,20 @@ Requirements: Android Studio, JDK 17, Android SDK Platform 35, Build Tools (Grad
 
 4. Allow camera access. Close Google Camera or another app if Camera2 reports that the camera is busy.
 
-The app does not need photo-library or storage permission. Its inputs and results are kept in app-private storage. The Share action grants temporary access to the result; Android's document picker handles exports.
+The app does not need photo-library or storage permission. New inputs and results use app-private temporary cache. Press OK to archive them to the ready laptop, or discard them when disconnected. Older saved sessions retain manual export actions. See the local dashboard instructions below.
+
+
+### Preview install when the original signing key is unavailable
+
+Build with `./gradlew.bat -PcameraPreview=true :app:assembleDebug` to produce **UW camera** (`com.example.referencecamera.preview`, v0.1.8-preview). It installs alongside the original package and uses separate app-private storage. The default build keeps the original app ID and also uses the UW camera label. Do not uninstall the original app merely to bypass a signing mismatch; that would remove its app-private captures.
+
+## Local laptop admin dashboard
+
+Double-click `Start-Camera-Lab.cmd` to start the USB companion and open `http://127.0.0.1:8765`. It provides live progress, a stage inspector and comparison slider, archives, notes, ZIP/CSV exports, and a ground-truth quality matrix. Read [desktop/README.md](desktop/README.md) for setup, storage, and measurement details.
+
+No image is copied before phone approval. The laptop verifies every file before the phone clears its temporary session. Disconnected OK discards the preview without queuing it. Existing saved captures stay intact.
+
+Use `-PcameraAbi=arm64-v8a` when building for Pixel 7 to omit unused native architectures. This changes device compatibility and APK size, not the model or image processing.
 
 ## Capture to result
 
@@ -53,9 +109,9 @@ The app does not need photo-library or storage permission. Its inputs and result
 2. It opens the logical camera, queries the two selected physical YUV stream configuration where the API implements that query, and attempts to configure that exact session. A successful configure is recorded as evidence for that particular combination of format and sizes. It does not establish support for every stream combination.
 3. Press the round shutter **once**. The app attempts dual repeating YUV requests, selecting the two images associated with one capture result. It tries common 4:3 sizes advertised by both physical cameras and the logical camera, using descending size caps of 2048, 1280, and 640 pixels. Both physical metadata entries and sensor timestamps are required. A pair is accepted only if its measured exposure gap is at most 50 ms (an explicit POC threshold, not exact synchronization). The last successful size is preferred for subsequent captures during that app session. Configuration acceptance alone is labeled as unverified delivery.
 4. If a pair is unavailable or that capture fails, the app automatically captures ultrawide followed by main. No second shutter tap is required. **SEQUENTIAL** and step-by-step progress make the timing limitation visible. Keep the phone and scene still until both images finish saving. Settings can also force the sequential method. Failed dual delivery is remembered for this strategy, camera routes, and OS build, so restarting does not repeat the slow attempts. Use **Settings → Retry dual-camera detection** to explicitly try again.
-5. OpenCV immediately processes both saved images on a worker dispatcher. The app opens the original/result comparison, processing status, and export actions. Reopen completed images with the bottom-left **Results** gallery button, including after restarting the app. The result screen explicitly distinguishes reference fusion, optional ONNX output, and a retained ultrawide when alignment is unreliable.
+5. OpenCV immediately processes both saved images on a worker dispatcher. The app opens the original/result comparison and processing status. New captures remain temporary until OK archives all stages to a ready laptop. **Recent** can also open older persistent sessions; those are never removed by temporary-preview cleanup. The result screen explicitly distinguishes reference fusion, optional ONNX output, and a retained ultrawide when alignment is unreliable.
 
-You do **not** need to import an ONNX model to capture, process, or view the baseline. The import button is under **Settings** as an optional advanced feature for a compatible reference-SR model. **Save to Files** on the result screen opens Android's document picker so you can save a PNG in Downloads or another folder; the app-private original does not automatically appear in the Photos gallery.
+You do **not** need to import an ONNX model to capture, process, or view the baseline. A pretrained model is bundled, so AI requires no import. Settings includes an AI toggle and optional custom-model import. For new captures, use OK to archive every stage to the laptop. Manual stage and ZIP exports remain available when inspecting older persistent sessions.
 
 Comparison controls offer Fit, 2× and 4× inspection, with dragging when zoomed. The Mask button overlays reference confidence in cyan. Newly processed sessions report reference coverage and pixels changed by at least 2/255 in any channel relative to the prepared ultrawide. These diagnostics measure processing activity, not quality. The baseline and comparison use the same INTER_AREA resize filter. The display loads the saved processing resolution; zoom does not recover extra pixels. Older sessions can be inspected but lack the new metrics and retain their original comparison files.
 
@@ -81,7 +137,7 @@ New results display separate capture and processing durations, also recorded in 
 | `alignment/FeatureAligner.kt` | ORB/Hamming ratio matches, RANSAC homography, spatial inlier support, local confidence |
 | `alignment/LocalRefiner.kt` | Small optical-flow correction with forward/backward consistency and displacement limits |
 | `fusion/MultiscaleFusion.kt` | Four-level Laplacian detail transfer, ultrawide low-frequency base, exact outside-mask preservation |
-| `model/ReferenceEnhancer.kt` | Optional ONNX model IO adapter and compatibility checks |
+| `model/ReferenceEnhancer.kt`, `model/ModelTiling.kt` | Bundled weights, tiled CPU inference, reference-model imports, confidence blending, and cancellation |
 | `processing/ProcessingPipeline.kt` | Stage orchestration, deterministic baseline, diagnostics, bounded-memory retry |
 | `storage/CaptureStore.kt` | Local sessions, metadata, PNG and ZIP export |
 | `CameraViewModel.kt`, `MainActivity.kt` | Capture state, lifecycle, permission, progress/errors, Material 3 UI |
@@ -92,30 +148,45 @@ Alignment maps main-camera coordinates into ultrawide coordinates. It requires e
 
 Distortion correction prefers the camera HAL's advertised FAST mode. The **actual result mode** is recorded. No second correction is applied to a HAL-corrected frame. When correction is OFF, OpenCV undistortion is enabled only with five intrinsic parameters, five distortion coefficients, a reported crop, and a compatible stream aspect ratio. Android's coefficient order is converted to OpenCV's order. Undefined remap boundaries retain original pixels and are excluded from fusion. If these conditions are absent, processing leaves distortion as captured and reports that limitation. A calibrated correction may change interior pixel geometry; there is no additional crop or output expansion.
 
-## Optional ONNX reference model
+## On-device ONNX enhancement
 
-No model weights are provided, fetched, or assumed. Until a compatible file is explicitly supplied, the app says **AI unavailable** and shows the deterministic OpenCV result. Generic sharpening is never presented as AI super-resolution.
+Version 0.1.7 bundles the authors' **Real-ESRGAN general x4v3** weights, exported to a 4.87 MB float32 ONNX graph without retraining. Source URLs, checkpoint and graph checksums, upstream commit, tensor contract, and license are in `app/src/main/assets/models/model.json`. The BSD 3-Clause notice is included in the APK and visible in Settings. The phone does not fetch weights.
 
-Use **Settings → Advanced: import ONNX model (optional)** to copy a file chosen on the device to:
+**Settings → Apply AI after OpenCV fusion** controls the optional stage and defaults to enabled. AI runs only with accepted alignment and nonzero confidence. The neural model receives the fused OpenCV image; it does not directly receive the main-camera reference. This is single-image restoration following classical camera fusion. It may synthesize texture, and photographic improvement has not been established.
 
-```text
-<app files directory>/models/reference_sr.onnx
+ONNX Runtime uses two CPU threads. Inference uses 96-pixel core tiles with a 40-pixel halo, covering the model's 34-pixel convolutional receptive-field radius. Context comes from real neighbouring pixels, clipped at image edges. Tiles without trusted-reference pixels are skipped. Native 4× output is clipped to RGB `[0,1]`, area-resized to the original canvas size, and stitched from tile cores. The saved image retains the existing processing resolution and full ultrawide view; it is not a saved 4× photograph.
+
+The model proposal retains baseline pixels outside processed cores. The final AI result blends the proposal against the baseline using confidence and preserves every zero-confidence pixel exactly. Both stages are saved. Inference failure retains the baseline; cancellation propagates between tiles. Enhancement duration includes model loading and preparation.
+
+On first use, the asset is copied to app-private `models/realesr-general-x4v3.onnx` and SHA-256 verified. A corrupted cached copy is restored from the asset. Settings can disable AI or remove a custom override to restore the bundled model.
+
+### Reproduce the export and host checks
+
+Use Python 3.12 in a development environment:
+
+```powershell
+python -m pip install -r tools/requirements-onnx.txt
+python tools/export_onnx_model.py --work work/model-export
 ```
 
-For a debug build, a developer can also put the model at that path using `adb shell run-as com.example.referencecamera`. The runtime file path belongs to the model adapter; camera, alignment, and fusion code need no changes. The importer accepts a single self-contained ONNX file up to 512 MiB. External tensor files are not supported by the import flow.
+The exporter verifies the official checkpoint checksum, loads it with `weights_only=True`, recreates its documented topology, and exports opset 17. Checks cover PyTorch/ONNX parity, odd dimensions, tiled/full-frame equivalence, skipped zero-confidence tiles, and preservation outside the mask. Results are in `docs/validation/onnx-host-checks.json`. These checks establish implementation consistency, not image quality.
 
-The adapter contract is deliberately explicit:
+### Advanced imports
+
+**Settings → Advanced: import custom ONNX model** installs an override at `<app files directory>/models/reference_sr.onnx`. The importer checks the graph and supported tensor contract before replacing the previous override. It accepts a single self-contained file up to 512 MiB; external tensors are unsupported. Runtime dimensions, values, memory, and latency are checked during inference. **Use bundled Real-ESRGAN** removes the override.
+
+The original reference-model contract remains supported:
 
 | Name | Type / shape | Meaning |
 |---|---|---|
-| `target` | float32 `[1,3,H,W]` | OpenCV baseline, RGB, range `[0,1]` |
-| `reference` | float32 `[1,3,H,W]` | Main frame aligned to the ultrawide canvas, RGB, range `[0,1]` |
-| `confidence` | float32 `[1,1,H,W]` | Trusted reference weight in `[0,1]`; zero outside reliable overlap |
-| `enhanced` | float32 `[1,3,H,W]` | Single output, same canvas, RGB values in `[0,1]` |
+| `target` | float32 `[1,3,H,W]` | OpenCV baseline, RGB `[0,1]` |
+| `reference` | float32 `[1,3,H,W]` | Main frame aligned to the canvas |
+| `confidence` | float32 `[1,1,H,W]` | Trusted reference weight `[0,1]` |
+| `enhanced` | float32 `[1,3,H,W]` | RGB output at the same canvas size |
 
-`H,W` must match the prepared canvas, including its orientation. Dynamic spatial dimensions are recommended. Batch must be 1; the adapter rejects incompatible names, types, shapes, or invalid output values and retains the baseline. The model should be trained for registered references and this normalization. A model that internally performs super-resolution must return its output at the requested target-canvas size. Tiling, arbitrary vendor-model adaptation, model training, and external-weight resolution are not implemented. A model needing other inputs or scales can be supported by a different `ReferenceEnhancer` implementation.
+Runtime batch is 1; dynamic spatial dimensions are recommended. Compatible single-image exports instead use `image` → `upscaled`, dynamic spatial dimensions, native 4× scale, and the metadata generated by our exporter. Arbitrary downloaded ONNX models require matching adapters; renaming their files is insufficient.
 
-ONNX Runtime runs on-device with two CPU threads. Its output is gated by the same confidence mask before it is saved. Merely loading or running an ONNX file is not proof of better quality. Memory use and speed depend on the supplied model; model failure or memory exhaustion leaves the baseline available.
+Sources: [authors' repository](https://github.com/xinntao/Real-ESRGAN), [official model release](https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.3.0).
 
 ## Files and diagnostics
 
@@ -126,10 +197,13 @@ Each capture session is stored under `files/captures/<time>-<id>/`:
 - `pair-attempts.json`: dual repeating-stream sizes attempted, delivery errors, and successful exposure gap. Dual capture can trade resolution for delivery; final input sizes and timing also appear in Processing details. The same-result frame pair is selected using exact image-to-physical-metadata timestamp matching; independent stream frames are not paired by callback arrival order.
 - `capture-error.txt`, if capture fails: the stage and exception details. Operational timeouts are shown as errors; lifecycle cancellation is reported as interruption. A timestamp-rejected image is retained for diagnosis before the rejection is reported.
 - `comparison-original.png`: oriented, resized ultrawide before optional geometric correction.
-- `aligned-reference.jpg`, `confidence.png`: alignment and mask diagnostics.
-- `baseline.png`: deterministic OpenCV result.
-- `result.png`: baseline or optional model result.
-- `processing.json`: alignment acceptance, notes, processing size, and input timestamp difference.
+- `prepared-ultrawide.png`, `prepared-main.png`: actual resized/oriented/lens-corrected preprocessing outputs.
+- `aligned-reference.png`, `confidence.png`: lossless aligned reference and visual confidence mask. Older sessions used `aligned-reference.jpg`.
+- `baseline.png`: deterministic OpenCV result, always saved as its own stage.
+- `onnx-proposal.png`: model proposal at the processing-canvas size, before confidence blending; baseline pixels remain outside processed cores. Native 4× tensors are not saved.
+- `onnx-result.png`: confidence-blended model proposal. Both model stages are saved only on success; a successful baseline-only retry removes stale files.
+- `result.png`: final output (ONNX output on success, otherwise the OpenCV baseline). The result screen compares the resized ultrawide against the selected OpenCV, model-proposal, or AI-blended stage. Share stage and Save stage export the stage being viewed. ZIP export keeps captured inputs, current image stages, and diagnostics. Older AI sessions without a standalone ONNX image use their existing final result as the AI stage.
+- `processing.json`: alignment acceptance, stage filenames, notes, canvas size, exposure gap, model ID/SHA-256, enhancement duration, and processed-tile count.
 
 `files/camera-report.json` stores the latest discovery/probe report. Partial inputs remain on disk if capture or processing fails. Export the ZIP to preserve inputs, output, and diagnostics. App-private sessions survive closing the app but are removed by clearing app data or uninstalling. **Results** lists completed sessions and opens their comparison and exports after app restart. In-progress capture/processing state is not automatically restored after process death. For debug recovery of partial inputs, `adb shell run-as com.example.referencecamera ls files/captures` can list saved sessions.
 
@@ -154,6 +228,6 @@ Run connected instrumentation checks on a dedicated test device or emulator. The
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-JVM checks cover padded/interleaved YUV planes, buffer positions, chroma order, sensor crop offsets, and preview geometry for portrait/landscape/270-degree sensors and a square viewport. Instrumentation checks use synthetic images to check canvas preservation, exact preservation outside zero-confidence regions, detail-band transfer inside a mask, known-crop alignment, rejection of featureless references, and a complete oriented capture-file-to-baseline pipeline with no model. Saved-result tests check reopening, newest-first ordering, incomplete-session exclusion, and storage path boundaries. They require an emulator or Android device and OpenCV's Android native library. They do not establish real capture timing or prove photographic quality.
+JVM checks cover tile coverage/context bounds, padded/interleaved YUV planes, buffer positions, chroma order, sensor crop offsets, and preview geometry for portrait/landscape/270-degree sensors and a square viewport. Instrumentation checks use synthetic images to check canvas preservation, exact preservation outside zero-confidence regions, detail-band transfer inside a mask, known-crop alignment, rejection of featureless references, and a complete oriented capture-file-to-baseline pipeline with no model. Saved-result tests check reopening, newest-first ordering, incomplete-session exclusion, storage path boundaries, standalone and legacy AI stages, stale-stage rejection, selected-stage exports, and a missing-baseline fallback. Synthetic pipeline tests also cover separate model-stage saving and cleanup on a baseline-only retry; this uses a test double, not trained-model inference. Additional ONNX tests execute the bundled model on a small synthetic image, verify checksums and zero-confidence preservation, exercise reference imports/non-finite rejection, and check disabling/cancellation. Android instrumentation requires an emulator or device and native OpenCV. They do not establish real capture timing or prove photographic quality.
 
 Primary API references: [Camera2 multi-camera](https://developer.android.com/media/camera/camera2/multi-camera), [physical OutputConfiguration routing](https://developer.android.com/reference/android/hardware/camera2/params/OutputConfiguration#setPhysicalCameraId(java.lang.String)), [ONNX Runtime Java](https://onnxruntime.ai/docs/get-started/with-java.html), and [OpenCV](https://docs.opencv.org/4.x/).

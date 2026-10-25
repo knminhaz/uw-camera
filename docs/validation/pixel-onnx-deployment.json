@@ -1,0 +1,18 @@
+{
+  "device": "Pixel 7",
+  "package": "com.example.referencecamera.preview",
+  "version": "0.1.7-preview",
+  "originalPackage": "com.example.referencecamera",
+  "originalVersion": "0.1.6",
+  "originalCaptureDirectories": 10,
+  "originalAppUninstalled": false,
+  "cameraStrategyPreferencesCopied": true,
+  "instrumentationTestsPassed": 19,
+  "instrumentationDurationSeconds": 10.344,
+  "bundledOnnxExecutedOnDevice": true,
+  "syntheticImagesOnly": true,
+  "photographicQualityMeasured": false,
+  "appLaunchedSuccessfully": true,
+  "launchColdStartMs": 786,
+  "apkSha256": "08866e9f0f8e706916e01adc2032a909a3b47abdee9ba075eebeeacd3e4feab7"
+}

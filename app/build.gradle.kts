@@ -4,16 +4,20 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val cameraPreview = providers.gradleProperty("cameraPreview").orNull == "true"
+
 android {
     namespace = "com.example.referencecamera"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.referencecamera"
+        applicationId = "com.example.referencecamera" + if (cameraPreview) ".preview" else ""
+        providers.gradleProperty("cameraAbi").orNull?.let { ndk { abiFilters += it } }
         minSdk = 28
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.1.6"
+        versionCode = 9
+        versionName = if (cameraPreview) "0.1.8-preview" else "0.1.8"
+        manifestPlaceholders["cameraAppLabel"] = "UW camera"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

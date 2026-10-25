@@ -1,0 +1,21 @@
+{
+  "versionName": "0.1.7",
+  "versionCode": 8,
+  "apkSha256": "5bb910879a91c4619ee4b9ab1d0b3db637c46e3f49adb71cb7de9801d06a3218",
+  "apkBytes": 269804183,
+  "modelSha256": "f33589a314c1a8984e87c5bee6d98ac94751f670da88d10c9ed2ad49ce5abbad",
+  "jvmTests": {
+    "tests": 13,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "lintErrors": 0,
+  "lintWarnings": 7,
+  "androidInstrumentationTestsCompiled": 19,
+  "androidInstrumentationTestsExecuted": false,
+  "phoneInstallationPerformed": false,
+  "photographicQualityMeasured": false,
+  "networkPermissionPresent": false,
+  "debugSigningCertificateSha256": "770527a5700f4c37322c297aa09c27cbd9f366fc8948637f1ca1a76ce596e94e"
+}

@@ -6,6 +6,7 @@ import android.view.Surface
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.referencecamera.camera.*
+import com.example.referencecamera.bridge.LaptopBridge
 import com.example.referencecamera.model.OnnxReferenceEnhancer
 import com.example.referencecamera.processing.ProcessingPipeline
 import com.example.referencecamera.processing.ProcessingResult
@@ -26,6 +27,9 @@ data class CameraUiState(
     val previewStatus: String = "", val previewLensSpecific: Boolean = false, val stage: Stage = Stage.ULTRAWIDE,
     val forceSequential: Boolean = false, val result: ProcessingResult? = null,
     val sessionDirectory: File? = null, val modelInstalled: Boolean = false,
+    val aiEnabled: Boolean = true, val modelLabel: String = "", val customModel: Boolean = false,
+    val laptopReady: Boolean = false, val laptopMessage: String = "Laptop companion not connected",
+    val temporaryPreview: Boolean = false,
     val hasBothInputs: Boolean = false, val savedResults: List<SavedCapture> = emptyList()
 ) {
     val usePair get() = support?.supported == true && !forceSequential
@@ -34,10 +38,13 @@ data class CameraUiState(
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
     private val engine = CameraEngine(application)
-    private val enhancer = OnnxReferenceEnhancer(application)
+    private val aiPreferences = application.getSharedPreferences("ai-enhancement", android.content.Context.MODE_PRIVATE)
+    private val enhancer = OnnxReferenceEnhancer(application).apply { enabled = aiPreferences.getBoolean("enabled", true) }
     private val store = CaptureStore(application)
+    private val laptop = LaptopBridge(application)
     private val pipeline = ProcessingPipeline(enhancer)
-    private val mutable = MutableStateFlow(CameraUiState(modelInstalled = enhancer.modelFile.exists()))
+    private val mutable = MutableStateFlow(CameraUiState(modelInstalled = enhancer.isModelAvailable,
+        aiEnabled = enhancer.enabled, modelLabel = enhancer.modelLabel, customModel = enhancer.hasCustomModel))
     val state = mutable.asStateFlow()
     private var surface: Surface? = null
     private var previewJob: Job? = null
@@ -49,7 +56,39 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var main: CapturedFrame? = null
     private var simultaneous = false
 
-    init { refreshSavedResults() }
+    init {
+        runCatching { store.clearAbandonedTemporarySessions() }
+        refreshSavedResults()
+        viewModelScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                val current = mutable.value
+                val phase = when {
+                    laptop.hasRequest() -> "transferring"
+                    current.capturing -> "capture"
+                    current.stage == Stage.RESULT && current.busy -> "processing"
+                    current.stage == Stage.RESULT && current.result != null -> "preview"
+                    else -> "camera"
+                }
+                runCatching {
+                    laptop.publish(JSONObject().put("phase", phase).put("progress", current.progress)
+                        .put("sessionId", current.sessionDirectory?.name ?: JSONObject.NULL)
+                        .put("aiEnabled", current.aiEnabled).put("aiApplied", current.result?.aiApplied ?: JSONObject.NULL)
+                        .put("model", current.modelLabel).put("captureMode", if (simultaneous) "dual" else "sequential")
+                        .put("referenceCoverage", current.result?.metrics?.referenceAreaPercent ?: JSONObject.NULL)
+                        .put("error", current.error ?: JSONObject.NULL))
+                }
+                val connection = laptop.connection()
+                mutable.update { if (it.laptopReady == connection.ready && it.laptopMessage == connection.message) it
+                    else it.copy(laptopReady = connection.ready, laptopMessage = connection.message) }
+                delay(750)
+            }
+        }
+    }
+
+    private fun reportProgress(message: String) {
+        laptop.progress(message)
+        mutable.update { it.copy(progress = message) }
+    }
 
     private fun refreshSavedResults() = viewModelScope.launch {
         val saved = withContext(Dispatchers.IO) { store.savedResults() }
@@ -65,7 +104,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 engine.stop()
                 val (directory, result) = withContext(Dispatchers.IO) { store.openResult(id) }
                 wide = null; main = null
-                mutable.update { it.copy(stage = Stage.RESULT, sessionDirectory = directory, result = result, hasBothInputs = false, progress = "Saved result opened. Export PNG to choose a folder visible in Files.") }
+                mutable.update { it.copy(stage = Stage.RESULT, sessionDirectory = directory, result = result, hasBothInputs = false, temporaryPreview = store.isTemporary(directory), progress = "Preview opened. OK copies all stages when the laptop is ready.") }
             } catch (e: Exception) { if (e is CancellationException) throw e; fail(e, "Could not open saved result") }
             finally { mutable.update { it.copy(busy = false) }; startPreview() }
         }
@@ -128,11 +167,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 previewJob?.cancelAndJoin()
                 previewRoute = null; previewToken = null
                 val directory = mutable.value.sessionDirectory ?: withContext(Dispatchers.IO) { store.create() }
-                mutable.update { it.copy(sessionDirectory = directory) }
+                laptop.begin()
+                mutable.update { it.copy(sessionDirectory = directory, temporaryPreview = store.isTemporary(directory)) }
                 wide = null; main = null
                 val frames = if (pair) {
                     try {
-                        engine.capturePair(report, directory, displayDegrees) { message -> mutable.update { it.copy(progress = message) } }
+                        engine.capturePair(report, directory, displayDegrees, ::reportProgress)
                             .also { frames ->
                                 simultaneous = true
                                 val gap = kotlin.math.abs(frames[0].timestampNs - frames[1].timestampNs) / 1_000_000.0
@@ -150,7 +190,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 mutable.update { it.copy(capturing = false, hasBothInputs = wide != null && main != null) }
                 processInputs(directory, android.os.SystemClock.elapsedRealtime() - captureStarted)
             } catch (e: CancellationException) {
-                mutable.update { it.copy(progress = "Capture interrupted. Inputs already saved remain on the device.") }; throw e
+                mutable.update { it.copy(progress = "Capture interrupted. Inputs are temporary until approved on this screen.") }; throw e
             } catch (e: Exception) {
                 fail(e, if (mutable.value.hasBothInputs) "Processing failed; original inputs are saved" else "Capture failed; retry with the phone still")
             } catch (_: OutOfMemoryError) { fail(null, "Not enough memory for capture. Close other camera apps and retry.") }
@@ -160,9 +200,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private suspend fun captureSequential(report: CameraReport, directory: File, displayDegrees: Int): List<CapturedFrame> {
         simultaneous = false
-        val first = engine.capture(listOf(report.wide), directory, displayDegrees) { message -> mutable.update { it.copy(progress = "1/2 Ultrawide · $message") } }.single()
+        val first = engine.capture(listOf(report.wide), directory, displayDegrees) { message -> reportProgress("1/2 Ultrawide · " + message) }.single()
         withContext(Dispatchers.IO) { store.metadata(directory, report, mutable.value.support, listOf(first), false) }
-        val second = engine.capture(listOf(report.main), directory, displayDegrees) { message -> mutable.update { it.copy(progress = "2/2 Main · $message") } }.single()
+        val second = engine.capture(listOf(report.main), directory, displayDegrees) { message -> reportProgress("2/2 Main · " + message) }.single()
         return listOf(first, second)
     }
 
@@ -182,26 +222,64 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun processInputs(directory: File, captureMs: Long? = null) {
         mutable.update { it.copy(capturing = false, stage = Stage.RESULT, progress = "Processing captured inputs…") }
         val started = android.os.SystemClock.elapsedRealtime()
-        val result = pipeline.process(wide!!, main!!, directory) { message -> mutable.update { it.copy(progress = message) } }
+        val result = pipeline.process(wide!!, main!!, directory, ::reportProgress)
+        laptop.complete()
         val processingMs = android.os.SystemClock.elapsedRealtime() - started
         val timing = listOfNotNull(captureMs?.let { "Capture: ${"%.1f".format(java.util.Locale.US, it / 1000.0)} s" },
             "Processing: ${"%.1f".format(java.util.Locale.US, processingMs / 1000.0)} s").joinToString(" · ")
         withContext(Dispatchers.IO) {
             val file = File(directory, "processing.json")
             val metadata = JSONObject(file.readText()).put("processingDurationMs", processingMs)
+                .put("stageTimingsMs", laptop.timings())
             if (captureMs != null) metadata.put("captureDurationMs", captureMs)
             metadata.put("notes", metadata.optString("notes") + "\n" + timing)
             file.writeText(metadata.toString(2))
         }
-        mutable.update { it.copy(result = result.copy(message = result.message + "\n\n" + timing), progress = "Result saved. $timing") }
+        mutable.update { it.copy(result = result.copy(message = result.message + "\n\n" + timing), progress = "Temporary preview ready. " + timing) }
         refreshSavedResults()
+    }
+
+    private suspend fun leaveResult(message: String) {
+        laptop.clearRequest()
+        mutable.value.sessionDirectory?.let { directory -> withContext(Dispatchers.IO) { store.discardTemporary(directory) } }
+        wide = null; main = null
+        mutable.update { it.copy(stage = Stage.ULTRAWIDE, sessionDirectory = null, result = null, error = null,
+            hasBothInputs = false, temporaryPreview = false, busy = false, progress = message) }
+        refreshSavedResults()
+        startPreview()
     }
 
     fun newCapture() {
         if (mutable.value.busy) return
-        wide = null; main = null
-        mutable.update { it.copy(stage = Stage.ULTRAWIDE, sessionDirectory = null, result = null, error = null, hasBothInputs = false, progress = "Ready for a new capture.") }
-        startPreview()
+        operation = viewModelScope.launch {
+            mutable.update { it.copy(busy = true) }
+            try { leaveResult("Temporary preview discarded. Ready for a new capture.") }
+            catch (e: Exception) { if (e is CancellationException) throw e; fail(e, "Could not clear preview") }
+            finally { mutable.update { it.copy(busy = false) } }
+        }
+    }
+
+    fun confirmResult() {
+        val current = mutable.value
+        val directory = current.sessionDirectory ?: return
+        if (current.busy || current.result == null) return
+        operation = viewModelScope.launch {
+            mutable.update { it.copy(busy = true, error = null) }
+            try {
+                if (!laptop.connection().ready) {
+                    val message = if (store.isTemporary(directory)) "Not saved: laptop unavailable. Temporary preview discarded."
+                        else "Laptop unavailable. Existing saved session retained."
+                    leaveResult(message)
+                } else {
+                    mutable.update { it.copy(progress = "Saving all stages to the laptop. Waiting for verification…") }
+                    val expected = withContext(Dispatchers.IO) { laptop.prepareTransfer(directory, store.relativeDirectory(directory)) }
+                    val ack = laptop.awaitAcknowledgement(expected)
+                    leaveResult("All " + ack.getInt("fileCount") + " stage files verified on laptop. Phone preview cleared.")
+                }
+            } catch (e: CancellationException) { laptop.clearRequest(); throw e }
+            catch (e: Exception) { laptop.clearRequest(); fail(e, "Laptop save failed. Retry OK or discard this temporary preview.") }
+            finally { mutable.update { it.copy(busy = false) }; startPreview() }
+        }
     }
 
     fun retryCamera() {
@@ -209,13 +287,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (mutable.value.report == null) initialize() else startPreview()
     }
 
-    fun export(uri: Uri, session: Boolean) = fileOperation("Exporting…") {
+    fun export(uri: Uri, session: Boolean, imagePath: String? = null) = fileOperation("Exporting…") {
         val current = mutable.value
         if (session) store.exportSession(current.sessionDirectory ?: error("No session to export"), uri)
-        else store.export(current.result?.output ?: error("No result to export"), uri)
+        else store.export((current.result ?: error("No result to export")).exportImage(imagePath), uri)
     }
 
-    fun importModel(uri: Uri) = fileOperation("Importing optional model…") {
+    fun enableAi(enabled: Boolean) {
+        if (mutable.value.busy) return
+        enhancer.enabled = enabled
+        aiPreferences.edit().putBoolean("enabled", enabled).apply()
+        mutable.update { it.copy(aiEnabled = enabled) }
+    }
+
+    fun useBundledModel() = fileOperation("Restoring bundled model…") {
+        check(!enhancer.modelFile.exists() || enhancer.modelFile.delete()) { "Cannot remove custom model" }
+        mutable.update { it.copy(modelInstalled = enhancer.isModelAvailable, modelLabel = enhancer.modelLabel, customModel = false) }
+    }
+
+    fun importModel(uri: Uri) = fileOperation("Checking imported ONNX model…") {
         val target = enhancer.modelFile
         target.parentFile!!.mkdirs()
         val temp = File(target.parentFile, "import.onnx.part")
@@ -227,8 +317,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } ?: error("Cannot read model file")
             require(temp.length() > 0) { "Model file is empty" }
-            check(temp.renameTo(target)) { "Cannot install model" }
-            mutable.update { it.copy(modelInstalled = true) }
+            enhancer.validateModel(temp)
+            java.nio.file.Files.move(temp.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            mutable.update { it.copy(modelInstalled = true, modelLabel = enhancer.modelLabel, customModel = true) }
         } finally { temp.delete() }
     }
 
@@ -264,5 +355,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     private fun cancelPreview() { previewJob?.cancel(); previewRoute = null; previewToken = null }
     private fun fail(error: Throwable?, message: String) { mutable.update { it.copy(progress = message, error = listOfNotNull(message, error?.message).joinToString(": ")) } }
-    override fun onCleared() { engine.close() }
+    override fun onCleared() {
+        laptop.clearRequest()
+        mutable.value.sessionDirectory?.let { runCatching { store.discardTemporary(it) } }
+        engine.close()
+    }
 }

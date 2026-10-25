@@ -22,6 +22,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -101,7 +102,7 @@ class MainActivity : ComponentActivity() {
         val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
             type = "image/png"; putExtra(Intent.EXTRA_STREAM, uri)
-            clipData = ClipData.newRawUri("Reference camera result", uri)
+            clipData = ClipData.newRawUri("UW camera result", uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }, "Share processed result"))
     }
@@ -122,15 +123,25 @@ private fun CameraApp(controller: CameraViewModel, displayDegrees: () -> Int, sh
         onDispose { lifecycle.removeObserver(observer) }
     }
     val requestPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permission = it }
-    val exportResult = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { it?.let { uri -> controller.export(uri, false) } }
+    var pendingExportPath by rememberSaveable { mutableStateOf<String?>(null) }
+    val exportResult = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
+        uri?.let { controller.export(it, false, pendingExportPath) }
+        pendingExportPath = null
+    }
     val exportSession = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { it?.let { uri -> controller.export(uri, true) } }
     val importModel = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(controller::importModel) }
     LaunchedEffect(permission) { if (permission) controller.initialize() }
     var showResults by rememberSaveable { mutableStateOf(false) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var modelLicense by remember { mutableStateOf<String?>(null) }
+    modelLicense?.let { license ->
+        AlertDialog(onDismissRequest = { modelLicense = null }, title = { Text("Bundled model license") },
+            text = { Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) { Text(license) } },
+            confirmButton = { TextButton(onClick = { modelLicense = null }) { Text("Close") } })
+    }
 
     if (showResults) AlertDialog(onDismissRequest = { showResults = false }, title = { Text("Saved results") }, text = {
-        if (state.savedResults.isEmpty()) Text("No completed results yet. Press the shutter once to capture both lenses. OpenCV processing starts automatically; no ONNX model is needed.")
+        if (state.savedResults.isEmpty()) Text("No recent previews yet. Take a capture, review the slider, then press OK to archive all stages when the laptop is ready.")
         else LazyColumn(Modifier.heightIn(max = 420.dp)) {
             items(state.savedResults, key = { it.id }) { saved ->
                 TextButton(onClick = { showResults = false; controller.openSavedResult(saved.id) }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
@@ -152,11 +163,21 @@ private fun CameraApp(controller: CameraViewModel, displayDegrees: () -> Int, sh
                 Switch(checked = state.forceSequential || state.support?.supported != true, onCheckedChange = controller::sequential,
                     enabled = !state.busy && state.support?.supported == true, modifier = Modifier.semantics { contentDescription = "Use automatic sequential capture" })
             }
-            InfoCard("Optional AI model", if (state.modelInstalled) "A model file is installed. Its input/output contract is checked during processing; incompatible models leave the OpenCV baseline available."
-                else "OpenCV processing works without a model. Import is only for a trusted reference-SR ONNX model matching the documented contract. Arbitrary .onnx files will not work.")
+            InfoCard("On-device AI", state.modelLabel + "\n" + if (state.customModel)
+                "An imported model overrides the bundled model. Inference failures retain the OpenCV baseline."
+                else "The bundled photo-restoration model processes the OpenCV-fused image. It can synthesize detail; better photographic accuracy has not been established. Output keeps the same size.")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Apply AI after OpenCV fusion", style = MaterialTheme.typography.titleSmall)
+                    Text("Runs on the phone; may take additional time.", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = state.aiEnabled, onCheckedChange = controller::enableAi, enabled = !state.busy)
+            }
             OutlinedButton(onClick = { showSettings = false; controller.retryDual() }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Retry dual-camera detection") }
-            OutlinedButton(onClick = { importModel.launch(arrayOf("application/octet-stream", "application/onnx", "*/*")) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Advanced: import ONNX model (optional)") }
-            InfoCard("Where results are saved", "Completed comparisons are in Results at the bottom left of the camera screen. Export PNG saves a copy to a folder you choose in Files. App-private originals do not appear in Photos automatically.")
+            OutlinedButton(onClick = { importModel.launch(arrayOf("application/octet-stream", "application/onnx", "*/*")) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Advanced: import custom ONNX model") }
+            if (state.customModel) OutlinedButton(onClick = controller::useBundledModel, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Use bundled Real-ESRGAN") }
+            TextButton(onClick = { modelLicense = context.assets.open("models/LICENSE-Real-ESRGAN.txt").bufferedReader().use { it.readText() } }) { Text("Bundled model license") }
+            InfoCard("Laptop archive", "New captures stay temporary on the phone. Review the slider and press OK: all stages transfer only while the USB laptop companion is ready. If unavailable, OK discards the temporary preview. Older saved captures remain intact.")
             state.error?.let { InfoCard("Last error", it) }
             InfoCard("Camera diagnostics", listOfNotNull(state.support?.message, state.report?.let { "Ultrawide: ${it.wide.route}\nMain: ${it.main.route}\nSynchronization: ${it.syncType}\n\n${it.inventory}" }).joinToString("\n\n").ifEmpty { "Camera inspection is not complete." })
             Text("Research POC. Output is capped at 1280 pixels on its longest edge. No image-quality improvement has been measured.", style = MaterialTheme.typography.bodySmall)
@@ -167,29 +188,60 @@ private fun CameraApp(controller: CameraViewModel, displayDegrees: () -> Int, sh
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = controller::newCapture, enabled = !state.busy) { Icon(Icons.Outlined.ArrowBack, "Back to camera") }
-                Text("Result", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                TextButton(onClick = { showResults = true }, enabled = !state.busy) { Text("Saved (${state.savedResults.size})") }
+                Text(if (state.temporaryPreview) "Temporary preview" else "Saved result", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                TextButton(onClick = { showResults = true }, enabled = !state.busy) { Text("Recent (${state.savedResults.size})") }
             }
             if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             Text(state.progress, style = MaterialTheme.typography.bodyMedium)
             state.error?.let { CaptureError(state, controller) }
             state.result?.let { result ->
-                Text(when { result.aiApplied -> "ONNX + OpenCV"; result.referenceUsed -> "OpenCV reference fusion"; else -> "Ultrawide retained • reference not reliable" }, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-                key(result.output.absolutePath, result.output.lastModified()) { Comparison(result.before, result.output) }
+                InfoCard(if (state.laptopReady) "Laptop ready" else "Laptop unavailable", if (state.laptopReady)
+                    "OK saves every stage to the laptop. Temporary phone files are cleared only after verification."
+                    else if (state.temporaryPreview) "OK discards this temporary preview. Nothing will be queued or archived."
+                    else "This older saved session will remain on the phone.")
+                var selectedStage by rememberSaveable(result.output.absolutePath) { mutableStateOf(if (result.aiOutput?.isFile == true) "onnx" else "baseline") }
+                val hasOnnxOutput = result.aiOutput?.isFile == true
+                val hasProposal = result.aiProposal?.isFile == true
+                val effectiveStage = when {
+                    selectedStage == "onnx" && hasOnnxOutput -> "onnx"
+                    selectedStage == "proposal" && hasProposal -> "proposal"
+                    else -> "baseline"
+                }
+                val comparisonOutput = when (effectiveStage) {
+                    "proposal" -> result.aiProposal?.takeIf { it.isFile } ?: result.comparisonImage(false)
+                    "onnx" -> result.comparisonImage(true)
+                    else -> result.comparisonImage(false)
+                }
+                Text(when { result.aiApplied -> "AI enhancement applied"; result.referenceUsed -> "OpenCV reference fusion"; else -> "Ultrawide retained • reference not reliable" }, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                Text("Ultrawide (resized) compared with:", style = MaterialTheme.typography.bodySmall)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = effectiveStage == "baseline", onClick = { selectedStage = "baseline" }, label = { Text(if (result.baseline.isFile) "OpenCV baseline" else "Saved result") })
+                    if (hasProposal) FilterChip(selected = effectiveStage == "proposal", onClick = { selectedStage = "proposal" }, label = { Text("Model proposal") })
+                    if (hasOnnxOutput) FilterChip(selected = effectiveStage == "onnx", onClick = { selectedStage = "onnx" }, label = { Text("AI blended result") })
+                }
+                key(comparisonOutput.absolutePath, comparisonOutput.lastModified()) { Comparison(result.before, comparisonOutput) }
                 result.metrics?.let { metrics ->
                     Text(String.format(java.util.Locale.US, "Reference area %.1f%% · changed pixels %.1f%% (≥2/255)", metrics.referenceAreaPercent, metrics.changedPixelPercent), style = MaterialTheme.typography.bodySmall)
                     Text("Pixel changes measure activity, not improved quality. These numbers describe the OpenCV baseline.", style = MaterialTheme.typography.bodySmall)
                 }
-                Text("Move the slider to compare. Zoom and drag to inspect detail. Saved in Results.", style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = { share(result.output) }, enabled = !state.busy, modifier = Modifier.weight(1f)) { Text("Share") }
-                    FilledTonalButton(onClick = { exportResult.launch("reference-result.png") }, enabled = !state.busy, modifier = Modifier.weight(1f)) { Text("Save to Files") }
+                Text("Move the slider to compare stages. New captures are temporary until the laptop verifies your approved archive.", style = MaterialTheme.typography.bodySmall)
+                if (!state.temporaryPreview) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = { share(comparisonOutput) }, enabled = !state.busy, modifier = Modifier.weight(1f)) { Text("Share stage") }
+                    FilledTonalButton(onClick = {
+                        pendingExportPath = comparisonOutput.absolutePath
+                        exportResult.launch("reference-${comparisonOutput.name}")
+                    }, enabled = !state.busy, modifier = Modifier.weight(1f)) { Text("Save stage") }
                 }
                 var notes by rememberSaveable { mutableStateOf(false) }
                 TextButton(onClick = { notes = !notes }) { Text(if (notes) "Hide processing details" else "Processing details") }
                 if (notes) InfoCard("Processing notes", result.message)
-                OutlinedButton(onClick = { exportSession.launch("reference-camera-session.zip") }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Export inputs & diagnostics") }
-                Button(onClick = controller::newCapture, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Back to camera") }
+                if (!state.temporaryPreview) OutlinedButton(onClick = { exportSession.launch("reference-camera-session.zip") }, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) { Text("Export existing saved session") }
+                Button(onClick = controller::confirmResult, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (state.laptopReady) "OK · Save all stages to laptop" else if (state.temporaryPreview) "OK · Discard temporary preview" else "Done")
+                }
+                OutlinedButton(onClick = controller::newCapture, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (state.temporaryPreview) "Discard and return to camera" else "Back to camera")
+                }
             }
             if (!state.busy && state.result == null) OutlinedButton(onClick = controller::newCapture) { Text("Back to camera") }
         }
@@ -198,9 +250,11 @@ private fun CameraApp(controller: CameraViewModel, displayDegrees: () -> Int, sh
 
     Column(Modifier.fillMaxSize().background(Color.Black).windowInsetsPadding(WindowInsets.safeDrawing)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("REFERENCE CAMERA", color = Color.White, style = MaterialTheme.typography.labelLarge)
+            Text("UW camera", color = Color.White, style = MaterialTheme.typography.labelLarge)
             Text(if (state.usePair) "DUAL REQUEST" else "SEQUENTIAL", color = Color(0xFFFFD66E), style = MaterialTheme.typography.labelMedium)
         }
+        Text(state.laptopMessage, Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp),
+            color = if (state.laptopReady) Color(0xFF77D9BA) else Color.Gray, style = MaterialTheme.typography.labelSmall)
         Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black), contentAlignment = Alignment.Center) {
             val lens = state.previewLens
             when {
@@ -246,7 +300,7 @@ private fun CameraApp(controller: CameraViewModel, displayDegrees: () -> Int, sh
                 }
             }
             Text(if (state.usePair) "One tap captures both lenses" else "One tap takes two shots • keep still", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-            Text(if (state.modelInstalled) "OpenCV + optional ONNX" else "OpenCV processing • no model required", color = Color.Gray, style = MaterialTheme.typography.labelSmall)
+            Text(if (state.modelInstalled && state.aiEnabled) "OpenCV + on-device AI" else "OpenCV processing", color = Color.Gray, style = MaterialTheme.typography.labelSmall)
         }
     }
 }

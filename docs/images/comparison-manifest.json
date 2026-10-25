@@ -1,0 +1,157 @@
+{
+  "method": "Pixel compositing only; no generative image editing. Original capture pipeline includes the labeled Real-ESRGAN stage.",
+  "figures": [
+    {
+      "sessionId": "1792920192129-c94fec-3fa7a525",
+      "scene": "Fabric texture",
+      "captureDateIST": "25 Oct 2026, 02:53:12 PM IST",
+      "note": "Indoor scene; leaf-pattern fabric and shelving.",
+      "cropXYXY": [
+        300,
+        828,
+        428,
+        956
+      ],
+      "cropScale": 4,
+      "interpolation": "nearest",
+      "cropSelection": "Selected for visible differences inside a trusted region; not a random benchmark sample",
+      "canvasSize": [
+        960,
+        1280
+      ],
+      "referenceCoveragePercent": 30.371012369791668,
+      "baselineChangedPixelsPercent": 21.803385416666668,
+      "finalChangedPixelsPercent": 22.136149088541668,
+      "changeThreshold": "at least 2/255 in any RGB channel vs prepared-ultrawide.png, full canvas",
+      "processingMs": 241040,
+      "meanCropConfidence": 0.9312301336550245,
+      "qualityImprovementPercent": null,
+      "groundTruthAvailable": false,
+      "sourceSha256": {
+        "comparison-original.png": "27264e2bc27aeb686737ce1a2a12406e147ca7ced9b164591595916cd74eed42",
+        "prepared-ultrawide.png": "27264e2bc27aeb686737ce1a2a12406e147ca7ced9b164591595916cd74eed42",
+        "baseline.png": "49a1fb04f1a9ce7bfaff0d47a8afd3cd29dbf4886253426112be42f7b61dee22",
+        "result.png": "b97eb7cae38f0f8bd7034a7513f30c8dd5bdcd35beaf51c6bc06d1bf2325ec85",
+        "confidence.png": "807fc87808900abca2f2b6333b6490f08ca1f04d7e93e6cb9374b89bbcea13a2",
+        "processing.json": "0e56f247869f0b240c9edf316017ff0dc9c9fa8556caeda62770c84f86d8db14",
+        "capture.json": "7a3d1dfccf12f0cfb8be90b38c3654f3d62795959c4f52854c21909ac1ceebb7"
+      },
+      "figure": "fabric-detail.png",
+      "figureSha256": "acda76223b9aafbadd6e2c1941ea9abb645018dbb4e5bdf19391b9deec68d749"
+    },
+    {
+      "sessionId": "1792952814379-196fe7-64446bf1",
+      "scene": "Printed packaging",
+      "captureDateIST": "25 Oct 2026, 11:56:54 PM IST",
+      "note": "Indoor scene; small printed detail on packaging.",
+      "cropXYXY": [
+        408,
+        636,
+        536,
+        764
+      ],
+      "cropScale": 4,
+      "interpolation": "nearest",
+      "cropSelection": "Selected for visible differences inside a trusted region; not a random benchmark sample",
+      "canvasSize": [
+        960,
+        1280
+      ],
+      "referenceCoveragePercent": 4.580647786458333,
+      "baselineChangedPixelsPercent": 2.8163248697916665,
+      "finalChangedPixelsPercent": 2.89404296875,
+      "changeThreshold": "at least 2/255 in any RGB channel vs prepared-ultrawide.png, full canvas",
+      "processingMs": 23081,
+      "meanCropConfidence": 0.9953385895373774,
+      "qualityImprovementPercent": null,
+      "groundTruthAvailable": false,
+      "sourceSha256": {
+        "comparison-original.png": "ca654c0e9b7d596eef1b2884ec853d7395f802c293b8b9a5c612bc4d7e0f7130",
+        "prepared-ultrawide.png": "ca654c0e9b7d596eef1b2884ec853d7395f802c293b8b9a5c612bc4d7e0f7130",
+        "baseline.png": "75bca8a50ce8305d1df8eb2ad4a4eeb03beafc7d7379c4ade217052fed559938",
+        "result.png": "c003f3ebba117b9ca1515111e3697aa51389802698da8ebbcbad54df373d9ab1",
+        "confidence.png": "b46f76fc9dd0237575f13061ec496648d9e640fe3a6b07c20cfec8e96a609249",
+        "processing.json": "d221977ecced6ff0fe77efbffcf96e79c117fecf7f2b48f88b94a5da8367e024",
+        "capture.json": "3aae45fea9ea07b43477a79667f58444f2fa374c307de49cc606ab92ed889a0d"
+      },
+      "figure": "packaging-detail.png",
+      "figureSha256": "939ffdb65774a378929c31b918e54121b7a0e0c041b5367c7df3c7be3b750efe"
+    },
+    {
+      "sessionId": "1792953137936-636bb6-6683b6ea",
+      "scene": "Screen detail",
+      "captureDateIST": "26 Oct 2026, 12:02:17 AM IST",
+      "note": "Photographed display; screen moire and resampling can affect appearance.",
+      "cropXYXY": [
+        624,
+        396,
+        752,
+        524
+      ],
+      "cropScale": 4,
+      "interpolation": "nearest",
+      "cropSelection": "Selected for visible differences inside a trusted region; not a random benchmark sample",
+      "canvasSize": [
+        960,
+        1280
+      ],
+      "referenceCoveragePercent": 15.376790364583334,
+      "baselineChangedPixelsPercent": 12.268636067708332,
+      "finalChangedPixelsPercent": 12.732259114583332,
+      "changeThreshold": "at least 2/255 in any RGB channel vs prepared-ultrawide.png, full canvas",
+      "processingMs": 51802,
+      "meanCropConfidence": 0.9934768975949755,
+      "qualityImprovementPercent": null,
+      "groundTruthAvailable": false,
+      "sourceSha256": {
+        "comparison-original.png": "2628dcaeb9a4db2c1f4c4f1b18ec6c0814e5f2f59f81c4ca3ff4dd3d7d19bc67",
+        "prepared-ultrawide.png": "2628dcaeb9a4db2c1f4c4f1b18ec6c0814e5f2f59f81c4ca3ff4dd3d7d19bc67",
+        "baseline.png": "a7f20d58f3c03a24c2881126914b336cbbbf72606845488f9cc5ebd00e02bbc1",
+        "result.png": "ff54b3bff3732ede3f93d49fe6b5cd96d71bc5e8b2a8011577641b3dd1876d70",
+        "confidence.png": "a58bcb3b5dc89c92773266382f5dfbd36c6271bb1a963535a0bf25d0d34b71dd",
+        "processing.json": "6bce625d40a4d40a5d750e3658585f5ec35e052bb03281b9e2fb43bbc5a514de",
+        "capture.json": "6c1f7b4c20263a09571c630e281294dca82d82f4a4b2fad2e767f08390f8d759"
+      },
+      "figure": "screen-detail.png",
+      "figureSha256": "0ecedff314e86351bbd2dcb5f69362ac30c473d27340c1f5a176a2b946169a44"
+    },
+    {
+      "sessionId": "1792953727412-5706f0-6912899c",
+      "scene": "Dog figure / very low light",
+      "captureDateIST": "26 Oct 2026, 12:12:07 AM IST",
+      "note": "Very low light, as reported during capture; no lux measurement.",
+      "cropXYXY": [
+        336,
+        660,
+        464,
+        788
+      ],
+      "cropScale": 4,
+      "interpolation": "nearest",
+      "cropSelection": "Selected for visible differences inside a trusted region; not a random benchmark sample",
+      "canvasSize": [
+        960,
+        1280
+      ],
+      "referenceCoveragePercent": 2.5135904947916665,
+      "baselineChangedPixelsPercent": 1.4685872395833335,
+      "finalChangedPixelsPercent": 1.5299479166666665,
+      "changeThreshold": "at least 2/255 in any RGB channel vs prepared-ultrawide.png, full canvas",
+      "processingMs": 13540,
+      "meanCropConfidence": 0.5730832567401961,
+      "qualityImprovementPercent": null,
+      "groundTruthAvailable": false,
+      "sourceSha256": {
+        "comparison-original.png": "87b4c7ca0c51d39de3dcec34c908df6ace937a2088ac90384f635f34d8cb97c0",
+        "prepared-ultrawide.png": "87b4c7ca0c51d39de3dcec34c908df6ace937a2088ac90384f635f34d8cb97c0",
+        "baseline.png": "273f14bc7684e8ec5d28481b43b7a481f561b05eed6c296c5bfd16091296015a",
+        "result.png": "43dd3c137eb830c777d440f1d82fcba8e6d57520db340ce1e768ad7766968496",
+        "confidence.png": "edf26647522cbed7a0ccc7d1ad3cd41b14fdf0ce68b1d391bb4cc15b114af965",
+        "processing.json": "ae0e7574d5943c4c780fd70f31cc687859397be63f821e8ec62da393ee7edd12",
+        "capture.json": "0e602d9ace971aba6c0935bdbcc2c22ee812938e581ec329e515737b39608dac"
+      },
+      "figure": "low-light-dog.png",
+      "figureSha256": "a69071d2a914694b87179ccbdf175f7f32c021938f99ea053ad121c8300f5d25"
+    }
+  ]
+}

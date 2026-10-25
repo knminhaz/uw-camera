@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-25",
+  "appName": "UW camera",
+  "version": "0.1.8-preview",
+  "package": "com.example.referencecamera.preview",
+  "abi": [
+    "arm64-v8a"
+  ],
+  "apkBytes": 100970582,
+  "modelSha256": "f33589a314c1a8984e87c5bee6d98ac94751f670da88d10c9ed2ad49ce5abbad",
+  "desktopTests": {
+    "passed": 9
+  },
+  "pixelInstrumentation": {
+    "ordinarySuiteReported": 24,
+    "usbTestOptInInOrdinarySuite": "skipped",
+    "usbRoundTripOptIn": "passed",
+    "filesVerified": 9,
+    "phoneTemporarySessionRemovedAfterAck": true,
+    "fixture": "synthetic chart, no camera capture"
+  },
+  "jvmTests": "passed",
+  "browserChecks": [
+    "render",
+    "image loading",
+    "slider keyboard",
+    "fit/200%",
+    "difference map",
+    "history search",
+    "QA filter",
+    "quality matrix unavailable without ground truth",
+    "session notes saved",
+    "ground-truth dialog",
+    "USB readiness and storage settings"
+  ],
+  "realPhotoComparison": "Not performed; no matched Pixel Camera reference supplied",
+  "captureFraming": {
+    "appOutput": "2048x1536 YUV, 4:3",
+    "ultrawideRecordedCrop": "0 0 4032 3016",
+    "ultrawideRecordedActiveArray": "0 0 4032 3016",
+    "regularCameraDifferenceConfirmed": false
+  }
+}

@@ -1,0 +1,10 @@
+
+com.example.referencecamera.BaselineInstrumentedTest:.......
+com.example.referencecamera.OnnxEnhancerInstrumentedTest:.....
+com.example.referencecamera.SavedResultsInstrumentedTest:.......
+
+Time: 10.344
+
+OK (19 tests)
+
+
