@@ -1,5 +1,7 @@
 # UW camera
 
+**Project status: Active development**
+
 Native Kotlin Android research prototype intended for phones with ultrawide and main cameras across manufacturers. Pixel 7 is the current test device; compatibility on other devices still requires validation. It captures a real ultrawide frame and a real main-camera reference, aligns their overlap, and transfers detail into the ultrawide canvas. Processing stays on the device. New captures are temporary phone previews; OK archives every stage on the connected laptop through the local USB companion. No network permission, services, accounts, analytics, or runtime model downloads are included. A pretrained restoration model is bundled with the APK.
 
 **Image-quality improvement has not been established.** The connected Pixel 7 exposed ultrawide physical ID 3 and main physical ID 2 behind logical ID 0. Its two 2048×1536 YUV streams configured, but the actual pair request lost the main image buffer. Automatic sequential capture produced completed results. One recorded session had about 1.79 seconds between inputs and about 10% reliable reference coverage; these observations are not quality measurements.
