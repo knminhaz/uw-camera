@@ -3,7 +3,7 @@
   "figures": [
     {
       "sessionId": "1792920192129-c94fec-3fa7a525",
-      "scene": "Fabric texture",
+      "scene": "Indoor scene",
       "captureDateIST": "25 Oct 2026, 02:53:12 PM IST",
       "note": "Indoor scene; leaf-pattern fabric and shelving.",
       "cropXYXY": [
@@ -37,7 +37,7 @@
         "capture.json": "7a3d1dfccf12f0cfb8be90b38c3654f3d62795959c4f52854c21909ac1ceebb7"
       },
       "figure": "fabric-detail.png",
-      "figureSha256": "acda76223b9aafbadd6e2c1941ea9abb645018dbb4e5bdf19391b9deec68d749"
+      "figureSha256": "df0f0967e122dc58c11b22f1b70555c157202119d6779955d9eccd9477cc5955"
     },
     {
       "sessionId": "1792952814379-196fe7-64446bf1",

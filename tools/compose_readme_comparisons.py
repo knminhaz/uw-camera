@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT=Path(__file__).resolve().parents[1]
 CASES=[
- ('1792920192129-c94fec-3fa7a525','fabric-detail','Fabric texture','Indoor scene; leaf-pattern fabric and shelving.',(300,828,428,956)),
+ ('1792920192129-c94fec-3fa7a525','fabric-detail','Indoor scene','Indoor scene; leaf-pattern fabric and shelving.',(300,828,428,956)),
  ('1792952814379-196fe7-64446bf1','packaging-detail','Printed packaging','Indoor scene; small printed detail on packaging.',(408,636,536,764)),
  ('1792953137936-636bb6-6683b6ea','screen-detail','Screen detail','Photographed display; screen moire and resampling can affect appearance.',(624,396,752,524)),
  ('1792953727412-5706f0-6912899c','low-light-dog','Dog figure / very low light','Very low light, as reported during capture; no lux measurement.',(336,660,464,788)),

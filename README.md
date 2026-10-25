@@ -16,18 +16,18 @@ Crops were deliberately selected to show visible changes within trusted regions.
 
 | Scene | Capture date (IST) | Trusted reference area | Changed pixels: fusion | Changed pixels: final | Processing |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Fabric texture | 25 Oct 2026 | 30.37% | 21.80% | 22.14% | 241.0 s |
+| Indoor scene | 25 Oct 2026 | 30.37% | 21.80% | 22.14% | 241.0 s |
 | Printed packaging | 25 Oct 2026 | 4.58% | 2.82% | 2.89% | 23.1 s |
 | Screen detail | 26 Oct 2026 | 15.38% | 12.27% | 12.73% | 51.8 s |
 | Dog figure / very low light | 26 Oct 2026 | 2.51% | 1.47% | 1.53% | 13.5 s |
 
 **What the percentages mean:** trusted reference area comes from the app's saved fusion diagnostics. Changed pixels differ from `prepared-ultrawide.png` by at least 2/255 in any RGB channel across the full image. Fusion values come from the app diagnostics; final values are calculated from the archived final pixels. These are processing-activity percentages, **not percentage improvements in image quality**. No aligned ground truth was supplied, so no PSNR, SSIM, or quality-gain percentage is claimed.
 
-### Fabric texture
+### Indoor scene
 
 The leaf-pattern fabric is the clearest texture example in this set. Inspect the same strands and edges in both crops; the output's crisper appearance alone does not verify detail accuracy.
 
-![Fabric texture: full split comparison, matched 4x detail crops and green confidence overlays](docs/images/fabric-detail.png)
+![Indoor scene: full split comparison, matched 4x detail crops and green confidence overlays](docs/images/fabric-detail.png)
 
 ### Printed packaging
 
