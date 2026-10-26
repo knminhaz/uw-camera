@@ -204,6 +204,14 @@ The connected Gradle runner can uninstall its target app afterward, removing app
 
 Tests cover capture-buffer handling, preview geometry, alignment, fusion boundaries, ONNX inference, stage storage, cleanup, archive integrity and reference metrics. Synthetic tests check implementation behavior, not photographic quality. The opt-in USB round-trip test is documented in [desktop/README.md](desktop/README.md).
 
+## License
+
+Copyright (c) 2026 vedant412.
+
+UW camera's original project material is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE) for the terms and [NOTICE](NOTICE) for attribution.
+
+Third-party components retain their own licenses, including the bundled [Real-ESRGAN model's BSD 3-Clause notice](app/src/main/assets/models/LICENSE-Real-ESRGAN.txt).
+
 ## References
 
 - [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) and [official model release](https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.3.0)

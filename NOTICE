@@ -1,0 +1,13 @@
+UW camera
+Copyright (c) 2026 vedant412
+
+Original project material is licensed under the Apache License, Version 2.0.
+See LICENSE for the license terms.
+
+Third-party material remains subject to its respective licenses and notices.
+The bundled Real-ESRGAN model is copyright (c) 2021 Xintao Wang and is
+provided under the BSD 3-Clause License. Its full notice is included at:
+app/src/main/assets/models/LICENSE-Real-ESRGAN.txt
+
+Dependencies, including OpenCV, ONNX Runtime and Android libraries, retain
+their respective licenses. This notice does not relicense third-party material.
